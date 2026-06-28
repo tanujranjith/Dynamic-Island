@@ -13,6 +13,28 @@ in [`python-versions/`](python-versions/).
   <img src="media/demo.gif" alt="Dynamic Island opening and expanding" width="640">
 </p>
 
+<p align="center">
+  <a href="../../releases/latest/download/DynamicIsland.exe">
+    <img src="https://img.shields.io/badge/Download-DynamicIsland.exe-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Download DynamicIsland.exe">
+  </a>
+  &nbsp;
+  <a href="../../releases/latest"><img src="https://img.shields.io/badge/Releases-all%20versions-24292e?style=for-the-badge" alt="All releases"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6?logo=windows&logoColor=white" alt="Platform">
+  <img src="https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white" alt=".NET 10">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
+</p>
+
+<!-- Optional: add a live version badge once pushed by replacing OWNER/REPO:
+     ![Latest release](https://img.shields.io/github/v/release/OWNER/REPO) -->
+
+
+<p align="center">
+  <b>No install, no build</b> — download the self-contained <code>.exe</code> and double-click. Nothing else required.
+</p>
+
 ---
 
 ## The expanded island
@@ -94,17 +116,24 @@ throughout; type is **Segoe UI Variable**.
 
 ---
 
-## Download & run
+## Get it
 
-Prebuilt binaries are published on the **[Releases](../../releases)** page (the
-self-contained `.exe` is too large for the repository itself). Download
-`DynamicIsland.exe`, double-click — nothing else to install. The island appears at
-the top-center of your primary monitor and lives in the system tray (right-click
-for Settings, Recenter, Quit).
+### Option 1 — Download the app (easiest)
 
----
+1. Go to the **[latest release](../../releases/latest)** and download
+   **`DynamicIsland.exe`** (or use the green button above).
+2. Double-click it. The build is **self-contained** — no .NET, no installer,
+   nothing else to set up.
 
-## Build from source
+The island appears at the top-center of your primary monitor and lives in the
+system tray (right-click for Settings, Recenter, Quit). Windows SmartScreen may
+warn about an unsigned app the first time — choose *More info → Run anyway*.
+
+> The `.exe` is ~287 MB (it bundles the .NET runtime), which is over GitHub's
+> 100 MB per-file limit, so it's distributed as a **release asset** rather than
+> committed to the repo.
+
+### Option 2 — Build from source
 
 Requirements: **Windows 10 1809+ (Windows 11 recommended)** and the **.NET 10
 SDK**. From the repository root:
@@ -129,6 +158,20 @@ dotnet publish .\DynamicIsland.Windows -c Release -r win-x64
 > This project was developed with a workspace-local .NET SDK. If a global
 > `dotnet` reports "No .NET SDKs were found", install the .NET 10 SDK (or use the
 > local toolchain that shipped during development).
+
+### Publishing a release (maintainers)
+
+So the **Download** button resolves, attach the published exe to a GitHub Release
+named exactly `DynamicIsland.exe`:
+
+```powershell
+dotnet publish .\DynamicIsland.Windows -c Release -r win-x64
+# rename/copy the output to DynamicIsland.exe, then:
+gh release create v1.0.0 ".\DynamicIsland.Windows\bin\Release\net10.0-windows10.0.19041.0\win-x64\publish\DynamicIsland.Windows.exe#DynamicIsland.exe" --title "v1.0.0" --notes "First release"
+```
+
+The `#DynamicIsland.exe` suffix uploads the asset under that name, which is what the
+`releases/latest/download/DynamicIsland.exe` link points to.
 
 ---
 
