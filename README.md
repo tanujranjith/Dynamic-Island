@@ -58,13 +58,9 @@ can't seek.
 
 ## Animations & screenshots
 
-| Open / hold / close | Mid-collapse |
-| --- | --- |
-| <img src="media/open-close.gif" alt="open and close loop" width="420"> | <img src="media/collapsing.png" alt="collapsing" width="420"> |
-
-| Compact pill | Settings | Timer & alarm |
+| Open / hold / close | Mid-collapse | Compact pill |
 | --- | --- | --- |
-| <img src="media/compact.png" alt="compact" width="300"> | <img src="media/settings.png" alt="settings" width="300"> | <img src="media/timer.png" alt="timer" width="300"> |
+| <img src="media/open-close.gif" alt="open and close loop" width="300"> | <img src="media/collapsing.png" alt="collapsing" width="300"> | <img src="media/compact.png" alt="compact" width="300"> |
 
 > The animated GIFs capture the live hover/expand motion; `media/expanded.png` is a
 > pixel render of the current redesigned layout. An earlier design is kept at
