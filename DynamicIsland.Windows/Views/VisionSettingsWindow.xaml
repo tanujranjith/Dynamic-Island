@@ -1,0 +1,261 @@
+<Window x:Class="DynamicIsland.Windows.Views.VisionSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Camera Presence" Width="470" Height="710" MinWidth="430" MinHeight="560"
+        WindowStartupLocation="CenterScreen" Background="{DynamicResource SettingsBackgroundBrush}"
+        Foreground="{DynamicResource SettingsTextBrush}" FontFamily="Segoe UI Variable Text">
+    <Window.Resources>
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource SettingsMutedBrush}" />
+            <Setter Property="Margin" Value="6,18,0,8" />
+        </Style>
+        <Style x:Key="RowTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13.5" />
+            <Setter Property="Foreground" Value="{DynamicResource SettingsTextBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="RowDesc" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="Foreground" Value="{DynamicResource SettingsMutedBrush}" />
+            <Setter Property="Margin" Value="0,2,12,0" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="Divider" TargetType="Border">
+            <Setter Property="Height" Value="1" />
+            <Setter Property="Background" Value="#1FFFFFFF" />
+            <Setter Property="Margin" Value="0,4" />
+        </Style>
+        <Style x:Key="ToggleSwitch" TargetType="CheckBox">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="Track" Width="44" Height="26" CornerRadius="13" Background="#3C4654"
+                                BorderBrush="#54606E" BorderThickness="1">
+                            <Border x:Name="Thumb" Width="18" Height="18" CornerRadius="9" Background="#CBD4DF"
+                                    HorizontalAlignment="Left" Margin="4,0,0,0" RenderTransformOrigin="0.5,0.5">
+                                <Border.RenderTransform><TranslateTransform x:Name="ThumbT" X="0" /></Border.RenderTransform>
+                            </Border>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="#2587FF" />
+                                <Setter TargetName="Track" Property="BorderBrush" Value="#2587FF" />
+                                <Setter TargetName="Thumb" Property="Background" Value="#FFFFFF" />
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard><Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="ThumbT" Storyboard.TargetProperty="X" To="18" Duration="0:0:0.18">
+                                            <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6" /></DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard></BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard><Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="ThumbT" Storyboard.TargetProperty="X" To="0" Duration="0:0:0.18">
+                                            <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard></BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Thumb" Property="Width" Value="20" />
+                                <Setter TargetName="Thumb" Property="Height" Value="20" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Border Background="{DynamicResource SettingsHeaderBrush}" BorderBrush="#1FFFFFFF" BorderThickness="0,0,0,1" Padding="26,20">
+            <StackPanel Orientation="Horizontal">
+                <Border Width="42" Height="42" CornerRadius="12" Background="#2587FF" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="19" Foreground="White"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="Camera presence" FontFamily="Segoe UI Variable Display" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="Person detection &amp; face login — all processed locally" Margin="0,2,0,0"
+                               Foreground="{DynamicResource SettingsMutedBrush}" FontSize="12" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="26,6,26,12">
+            <StackPanel>
+                <!-- Live preview -->
+                <TextBlock Text="LIVE PREVIEW" Style="{StaticResource SectionHeader}" />
+                <Border CornerRadius="14" Background="#0A0D13" BorderBrush="{DynamicResource SettingsCardBorderBrush}" BorderThickness="1"
+                        Height="234" ClipToBounds="True">
+                    <Grid>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="30" Foreground="#46566B"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="Turn on camera presence to see a live preview"
+                                       Foreground="{DynamicResource SettingsMutedBrush}" FontSize="12" Margin="0,8,0,0"
+                                       HorizontalAlignment="Center" TextAlignment="Center" />
+                        </StackPanel>
+                        <Rectangle RenderOptions.BitmapScalingMode="HighQuality"
+                                   Visibility="{Binding HasCameraPreview, Converter={StaticResource BoolToVisibility}}">
+                            <Rectangle.Fill><ImageBrush ImageSource="{Binding CameraPreview}" Stretch="UniformToFill" /></Rectangle.Fill>
+                        </Rectangle>
+                        <!-- LIVE indicator -->
+                        <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12" Padding="8,3" CornerRadius="9"
+                                Background="#B3000000" Visibility="{Binding HasCameraPreview, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="7" Height="7" Fill="#FF3B30" VerticalAlignment="Center" />
+                                <TextBlock Text="LIVE" Margin="6,0,0,0" FontSize="10" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <!-- Controls -->
+                <TextBlock Text="DETECTION" Style="{StaticResource SectionHeader}" />
+                <Border Style="{StaticResource SettingsCard}">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Camera presence detection" Style="{StaticResource RowTitle}" />
+                                <TextBlock Text="Detect people near your screen. Off by default; turning it off releases the camera." Style="{StaticResource RowDesc}" />
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding VisionEnabled}" />
+                        </Grid>
+                        <Border Style="{StaticResource Divider}" />
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Privacy mode (recognise me)" Style="{StaticResource RowTitle}" />
+                                <TextBlock Text="Tell &quot;just you&quot; apart from an unknown person using your enrolled face." Style="{StaticResource RowDesc}" />
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding VisionPrivacyMode}" />
+                        </Grid>
+                        <Border Style="{StaticResource Divider}" />
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <TextBlock Text="Show status on the island" Style="{StaticResource RowTitle}" />
+                            <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding ShowVisionStatus}" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="FACE LOGIN" Style="{StaticResource SectionHeader}" />
+                <Border Style="{StaticResource SettingsCard}">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Your face" Style="{StaticResource RowTitle}" />
+                                <TextBlock Text="Enroll once so privacy mode can recognise you. Stored locally only." Style="{StaticResource RowDesc}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button Content="Enroll my face" Command="{Binding EnrollCommand}" Style="{StaticResource SettingsButton}"
+                                        Background="{DynamicResource SettingsSubtleButtonBrush}" Foreground="{DynamicResource SettingsTextBrush}" Margin="0,0,8,0" />
+                                <Button Content="Remove" Command="{Binding RemoveEnrollmentCommand}" Style="{StaticResource SettingsButton}"
+                                        Background="{DynamicResource SettingsSubtleButtonBrush}" Foreground="{DynamicResource SettingsTextBrush}" />
+                            </StackPanel>
+                        </Grid>
+                        <Border Style="{StaticResource Divider}" />
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Detection models" Style="{StaticResource RowTitle}" />
+                                <TextBlock Text="Downloads YOLOv4-tiny + face models (~25 MB) on demand. Or drop the files into the models folder by hand." Style="{StaticResource RowDesc}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button Content="Download" Command="{Binding DownloadModelsCommand}" Style="{StaticResource SettingsButton}"
+                                        Background="{DynamicResource SettingsSubtleButtonBrush}" Foreground="{DynamicResource SettingsTextBrush}" Margin="0,0,8,0" />
+                                <Button Content="Open folder" Command="{Binding OpenModelsFolderCommand}" Style="{StaticResource SettingsButton}"
+                                        Background="{DynamicResource SettingsSubtleButtonBrush}" Foreground="{DynamicResource SettingsTextBrush}" />
+                            </StackPanel>
+                        </Grid>
+                        <Border Style="{StaticResource Divider}" />
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE946;" FontFamily="Segoe Fluent Icons" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource SettingsMutedBrush}" Margin="0,0,8,0" />
+                            <TextBlock Text="{Binding VisionStatusLine}" Style="{StaticResource RowDesc}" Margin="0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Footer -->
+        <Border Grid.Row="2" Background="{DynamicResource SettingsHeaderBrush}" BorderBrush="#1FFFFFFF" BorderThickness="0,1,0,0" Padding="26,14">
+            <Button Content="Done" Click="Done_Click" Style="{StaticResource SettingsButton}" HorizontalAlignment="Right" />
+        </Border>
+
+        <!-- ===== Guided face-enrollment overlay ===== -->
+        <Grid Grid.RowSpan="3" Background="#E60A0D13"
+              Visibility="{Binding IsEnrolling, Converter={StaticResource BoolToVisibility}}">
+            <Border Width="372" VerticalAlignment="Center" HorizontalAlignment="Center"
+                    CornerRadius="20" Background="{DynamicResource SettingsCardBrush}"
+                    BorderBrush="{DynamicResource SettingsCardBorderBrush}" BorderThickness="1" Padding="28,26">
+                <Border.Effect><DropShadowEffect BlurRadius="36" ShadowDepth="8" Opacity="0.5" Color="#000000" /></Border.Effect>
+                <StackPanel>
+                    <TextBlock Text="{Binding EnrollTitle}" FontFamily="Segoe UI Variable Display" FontSize="20"
+                               FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="{DynamicResource SettingsTextBrush}" />
+
+                    <!-- Circular live preview with a progress ring around it -->
+                    <Grid Width="210" Height="210" Margin="0,22,0,18" HorizontalAlignment="Center">
+                        <!-- placeholder when the camera has no frame yet -->
+                        <Ellipse Width="184" Height="184" Fill="#10202938" />
+                        <TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="40" Foreground="#3A4759"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Ellipse Width="184" Height="184" RenderOptions.BitmapScalingMode="HighQuality"
+                                 Visibility="{Binding HasCameraPreview, Converter={StaticResource BoolToVisibility}}">
+                            <Ellipse.Fill><ImageBrush ImageSource="{Binding CameraPreview}" Stretch="UniformToFill" /></Ellipse.Fill>
+                        </Ellipse>
+                        <!-- track -->
+                        <Ellipse Width="210" Height="210" Stroke="#26FFFFFF" StrokeThickness="6" />
+                        <!-- progress (starts at top) -->
+                        <Ellipse Width="210" Height="210" StrokeThickness="6" StrokeDashCap="Round"
+                                 RenderTransformOrigin="0.5,0.5">
+                            <Ellipse.Stroke>
+                                <SolidColorBrush Color="#30D158" />
+                            </Ellipse.Stroke>
+                            <Ellipse.RenderTransform><RotateTransform Angle="-90" /></Ellipse.RenderTransform>
+                            <Ellipse.StrokeDashArray>
+                                <MultiBinding Converter="{StaticResource RingProgress}">
+                                    <Binding Path="EnrollProgress" />
+                                    <Binding Path="EnrollRingPerimeterUnits" />
+                                </MultiBinding>
+                            </Ellipse.StrokeDashArray>
+                        </Ellipse>
+                        <!-- success check -->
+                        <Border Width="210" Height="210" CornerRadius="105" Background="#CC11331F"
+                                Visibility="{Binding EnrollSucceeded, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons" FontSize="68" Foreground="#43E08A"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </Grid>
+
+                    <TextBlock Text="{Binding EnrollMessage}" HorizontalAlignment="Center" TextAlignment="Center"
+                               TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource SettingsMutedBrush}" />
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,22,0,0">
+                        <Button Content="Cancel" Command="{Binding CancelEnrollCommand}" Style="{StaticResource SettingsButton}"
+                                Background="{DynamicResource SettingsSubtleButtonBrush}" Foreground="{DynamicResource SettingsTextBrush}"
+                                Visibility="{Binding EnrollInProgress, Converter={StaticResource BoolToVisibility}}" />
+                        <Button Content="Done" Command="{Binding DismissEnrollCommand}" Style="{StaticResource SettingsButton}"
+                                Visibility="{Binding EnrollSucceeded, Converter={StaticResource BoolToVisibility}}" />
+                        <Button Content="Try again" Command="{Binding EnrollCommand}" Style="{StaticResource SettingsButton}" Margin="0,0,10,0"
+                                Visibility="{Binding EnrollFailed, Converter={StaticResource BoolToVisibility}}" />
+                        <Button Content="Close" Command="{Binding DismissEnrollCommand}" Style="{StaticResource SettingsButton}"
+                                Background="{DynamicResource SettingsSubtleButtonBrush}" Foreground="{DynamicResource SettingsTextBrush}"
+                                Visibility="{Binding EnrollFailed, Converter={StaticResource BoolToVisibility}}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

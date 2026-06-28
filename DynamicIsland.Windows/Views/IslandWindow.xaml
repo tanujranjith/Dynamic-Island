@@ -1,0 +1,918 @@
+<Window x:Class="DynamicIsland.Windows.Views.IslandWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:inf="clr-namespace:DynamicIsland.Windows.Infrastructure"
+        Title="Dynamic Island" Width="786" Height="148"
+        WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True"
+        Background="Transparent" ShowInTaskbar="False" Topmost="True"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Window.Resources>
+        <!-- Solid flat surfaces (no gradients) -->
+        <SolidColorBrush x:Key="DarkGlass" Color="#FF313539" />
+        <SolidColorBrush x:Key="LightGlass" Color="#FFEAECEF" />
+        <SolidColorBrush x:Key="IconSurface" Color="#3D5DAEFF" />
+        <SolidColorBrush x:Key="ChargingSurface" Color="#3328C77E" />
+        <!-- Liquid-glass overlays (only shown when the Liquid glass option is enabled). Each is used as
+             a Border.Background with the shell CornerRadius so the corners stay perfectly rounded. -->
+        <LinearGradientBrush x:Key="GlossSheen" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#3CFFFFFF" Offset="0" />
+            <GradientStop Color="#12FFFFFF" Offset="0.4" />
+            <GradientStop Color="#00FFFFFF" Offset="0.72" />
+        </LinearGradientBrush>
+        <!-- A little frosting: a soft milky veil so the clear glass diffuses what's behind it -->
+        <LinearGradientBrush x:Key="FrostVeil" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#22FFFFFF" Offset="0" />
+            <GradientStop Color="#12FFFFFF" Offset="1" />
+        </LinearGradientBrush>
+        <!-- Refraction: a bright, faintly chromatic inner bevel that mimics light bending at the glass edge -->
+        <LinearGradientBrush x:Key="RefractionRim" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#BEFFFFFF" Offset="0" />
+            <GradientStop Color="#2AC4ECFF" Offset="0.45" />
+            <GradientStop Color="#66A9DDFF" Offset="1" />
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="RefractionInner" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#00000000" Offset="0" />
+            <GradientStop Color="#1A6FC8FF" Offset="0.5" />
+            <GradientStop Color="#2EFFFFFF" Offset="1" />
+        </LinearGradientBrush>
+        <RadialGradientBrush x:Key="BlueGlow" GradientOrigin="0.16,0.0" Center="0.16,0.0" RadiusX="0.7" RadiusY="1.5">
+            <GradientStop Color="#4A5AA7FF" Offset="0" />
+            <GradientStop Color="#005AA7FF" Offset="1" />
+        </RadialGradientBrush>
+        <RadialGradientBrush x:Key="GreenGlow" GradientOrigin="0.9,1.0" Center="0.9,1.0" RadiusX="0.6" RadiusY="1.4">
+            <GradientStop Color="#2E34D399" Offset="0" />
+            <GradientStop Color="#0034D399" Offset="1" />
+        </RadialGradientBrush>
+        <!-- Static badge. A forever-pulsing animation here continuously re-rendered the whole transparent
+             (software-composited) window while plugged in, which showed up as constant CPU usage. -->
+        <Style x:Key="ChargingBadgeStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource ChargingSurface}" />
+            <Setter Property="BorderBrush" Value="#704FE6B1" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+        </Style>
+        <!-- Notification "combo" entrance: pop + blur-in, spring scale with an elastic overshoot, then an
+             accent-coloured glow pulse and a light sweep across the card. Started from code-behind
+             (PlayNotificationIntro) so it replays on every notification and can be skipped for reduced motion. -->
+        <Storyboard x:Key="NotifIntro">
+            <DoubleAnimation Storyboard.TargetName="NotifScale" Storyboard.TargetProperty="ScaleX" From="0.6" To="1" Duration="0:0:0.36">
+                <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.5" /></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+            <DoubleAnimation Storyboard.TargetName="NotifScale" Storyboard.TargetProperty="ScaleY" From="0.6" To="1" Duration="0:0:0.36">
+                <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.5" /></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+            <DoubleAnimation Storyboard.TargetName="NotifBanner" Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.16" />
+            <DoubleAnimation Storyboard.TargetName="NotifBlur" Storyboard.TargetProperty="Radius" From="12" To="0" Duration="0:0:0.28">
+                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetName="NotifGlow" Storyboard.TargetProperty="BlurRadius">
+                <EasingDoubleKeyFrame KeyTime="0:0:0" Value="0" />
+                <EasingDoubleKeyFrame KeyTime="0:0:0.20" Value="30"><EasingDoubleKeyFrame.EasingFunction><CubicEase EasingMode="EaseOut" /></EasingDoubleKeyFrame.EasingFunction></EasingDoubleKeyFrame>
+                <EasingDoubleKeyFrame KeyTime="0:0:0.55" Value="16" />
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetName="NotifGlow" Storyboard.TargetProperty="Opacity">
+                <EasingDoubleKeyFrame KeyTime="0:0:0" Value="0" />
+                <EasingDoubleKeyFrame KeyTime="0:0:0.18" Value="0.85" />
+                <EasingDoubleKeyFrame KeyTime="0:0:0.55" Value="0.45" />
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetName="NotifSweepRect" Storyboard.TargetProperty="Opacity">
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.14" Value="0" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.20" Value="0.9" />
+                <LinearDoubleKeyFrame KeyTime="0:0:0.58" Value="0" />
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimation Storyboard.TargetName="NotifSweep" Storyboard.TargetProperty="X" From="-1" To="1" BeginTime="0:0:0.12" Duration="0:0:0.46">
+                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut" /></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+
+        <!-- ============================================================================================
+             EXPANDED-ISLAND DESIGN TOKENS (reference redesign)
+             Smoked-acrylic, restrained: low-opacity translucent surfaces, cool-gray strokes, one warm
+             gold reserved exclusively for media playback progress. No glow/chrome/rainbow gradients.
+             ============================================================================================ -->
+        <!-- Warm muted gold — media playback progress ONLY -->
+        <SolidColorBrush x:Key="MediaGoldBrush" Color="#E6B86A" />
+        <SolidColorBrush x:Key="MediaGoldKnobBrush" Color="#F4E4BE" />
+        <SolidColorBrush x:Key="MediaTrackBrush" Color="#33FFFFFF" />
+        <!-- Inner smoked surfaces (kept low-opacity so the backdrop stays visible) -->
+        <SolidColorBrush x:Key="CardFillBrush" Color="#13FFFFFF" />
+        <SolidColorBrush x:Key="CardStrokeBrush" Color="#1FFFFFFF" />
+        <SolidColorBrush x:Key="MiniFillBrush" Color="#0EFFFFFF" />
+        <SolidColorBrush x:Key="MiniStrokeBrush" Color="#1AFFFFFF" />
+        <SolidColorBrush x:Key="PillFillBrush" Color="#16FFFFFF" />
+        <SolidColorBrush x:Key="ExplicitFillBrush" Color="#24FFFFFF" />
+        <!-- Cool blue-white waveform gradient -->
+        <LinearGradientBrush x:Key="WaveBarBrush" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#EAF2FF" Offset="0" />
+            <GradientStop Color="#86B6F2" Offset="0.55" />
+            <GradientStop Color="#3F73C6" Offset="1" />
+        </LinearGradientBrush>
+        <!-- RAM mini-bar gradient (muted blue → soft violet) -->
+        <LinearGradientBrush x:Key="RamBarBrush" StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#5AA7FF" Offset="0" />
+            <GradientStop Color="#9B7BE8" Offset="1" />
+        </LinearGradientBrush>
+        <CornerRadius x:Key="RadiusCard">16</CornerRadius>
+        <CornerRadius x:Key="RadiusMini">12</CornerRadius>
+        <!-- Continuous-corner status chip radius (squircle-like rounded square, not a pill) -->
+        <CornerRadius x:Key="RadiusBadge">13</CornerRadius>
+
+        <!-- NOW PLAYING status chip: a compact squircle-ish rounded square (≈13px corners), subtle charcoal
+             fill, thin stroke and roomy padding so it reads as a contained chip — deliberately NOT a pill. -->
+        <Style x:Key="NowPlayingBadge" TargetType="Border">
+            <Setter Property="CornerRadius" Value="{StaticResource RadiusBadge}" />
+            <Setter Property="Padding" Value="11,5" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="Background" Value="{StaticResource PillFillBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource CardStrokeBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+
+        <!-- Circular control button (transport prev/next, audio mute/±, quick actions). The CornerRadius is
+             intentionally huge so the chrome stays a perfect circle at any size — override Width/Height/
+             FontSize per use. Hover (120–220ms opacity), press (scale 0.9 with a soft spring), disabled. -->
+        <Style x:Key="CircleButton" TargetType="Button">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Margin" Value="3,0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Foreground" Value="#F2F5FA" />
+            <Setter Property="Background" Value="#15FFFFFF" />
+            <Setter Property="BorderBrush" Value="#20FFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="Cursor" Value="Hand" />
+            <!-- Default focus rectangle looks wrong on a circle; we draw a circular ring instead. -->
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid RenderTransformOrigin="0.5,0.5">
+                            <Grid.RenderTransform><ScaleTransform x:Name="S" ScaleX="1" ScaleY="1" /></Grid.RenderTransform>
+                            <Border x:Name="Chrome" CornerRadius="999" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" />
+                            <Border x:Name="Hover" CornerRadius="999" Background="#26FFFFFF" Opacity="0" />
+                            <Border x:Name="Focus" CornerRadius="999" Margin="-2" Opacity="0"
+                                    BorderBrush="#9AAFE0FF" BorderThickness="1.5" />
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Trigger.EnterActions><BeginStoryboard><Storyboard>
+                                    <DoubleAnimation Storyboard.TargetName="Hover" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.16"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                                </Storyboard></BeginStoryboard></Trigger.EnterActions>
+                                <Trigger.ExitActions><BeginStoryboard><Storyboard>
+                                    <DoubleAnimation Storyboard.TargetName="Hover" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.2"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                                </Storyboard></BeginStoryboard></Trigger.ExitActions>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Trigger.EnterActions><BeginStoryboard><Storyboard>
+                                    <DoubleAnimation Storyboard.TargetName="S" Storyboard.TargetProperty="ScaleX" To="0.9" Duration="0:0:0.09" />
+                                    <DoubleAnimation Storyboard.TargetName="S" Storyboard.TargetProperty="ScaleY" To="0.9" Duration="0:0:0.09" />
+                                </Storyboard></BeginStoryboard></Trigger.EnterActions>
+                                <Trigger.ExitActions><BeginStoryboard><Storyboard>
+                                    <DoubleAnimation Storyboard.TargetName="S" Storyboard.TargetProperty="ScaleX" To="1" Duration="0:0:0.34"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.9" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                                    <DoubleAnimation Storyboard.TargetName="S" Storyboard.TargetProperty="ScaleY" To="1" Duration="0:0:0.34"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.9" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                                </Storyboard></BeginStoryboard></Trigger.ExitActions>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Focus" Property="Opacity" Value="1" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.35" /></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Primary transport (play/pause): the visual centre of the controls — larger, with a restrained
+             warm-gold ring (no glow). Inherits CircleButton (hover / pressed / disabled states). -->
+        <Style x:Key="CirclePrimaryButton" TargetType="Button" BasedOn="{StaticResource CircleButton}">
+            <Setter Property="Width" Value="54" />
+            <Setter Property="Height" Value="54" />
+            <Setter Property="FontSize" Value="19" />
+            <Setter Property="Background" Value="#1FE6B86A" />
+            <Setter Property="BorderBrush" Value="#73E6B86A" />
+            <Setter Property="Foreground" Value="#F4E4BE" />
+        </Style>
+
+        <!-- 10-second seek control (rewind / fast-forward). A graphite circle that matches the prev/next
+             transport buttons; its content (defined inline) is a circular-arrow glyph with a small "10"
+             overlaid, so it reads as a replay-10 control and never looks like prev/next. -->
+        <Style x:Key="SeekButton" TargetType="Button" BasedOn="{StaticResource CircleButton}">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Margin" Value="6,0" />
+            <!-- Keep the informative tooltip visible even when seeking is unavailable (the button is then
+                 disabled+subdued); WPF hides tooltips on disabled controls unless this is set. -->
+            <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+        </Style>
+
+        <!-- Slim rounded seek bar with a gold fill and a soft playhead knob. -->
+        <Style x:Key="SeekBar" TargetType="ProgressBar">
+            <Setter Property="Height" Value="4" />
+            <Setter Property="Foreground" Value="{StaticResource MediaGoldBrush}" />
+            <Setter Property="Background" Value="{StaticResource MediaTrackBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Grid>
+                            <Border CornerRadius="2" Background="{TemplateBinding Background}" />
+                            <Border x:Name="PART_Track" />
+                            <Border x:Name="PART_Indicator" HorizontalAlignment="Left" CornerRadius="2" Background="{TemplateBinding Foreground}" />
+                            <Grid HorizontalAlignment="Left" IsHitTestVisible="False" Width="{Binding ActualWidth, ElementName=PART_Indicator}">
+                                <Ellipse Width="11" Height="11" Fill="{StaticResource MediaGoldKnobBrush}" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <Ellipse.Effect><DropShadowEffect BlurRadius="6" ShadowDepth="0" Opacity="0.5" Color="#000000" /></Ellipse.Effect>
+                                </Ellipse>
+                            </Grid>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Thin rounded mini progress bar (RAM card). -->
+        <Style x:Key="MiniBar" TargetType="ProgressBar">
+            <Setter Property="Background" Value="#22FFFFFF" />
+            <Setter Property="Foreground" Value="{StaticResource RamBarBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Grid>
+                            <Border CornerRadius="2" Background="{TemplateBinding Background}" />
+                            <Border x:Name="PART_Track" />
+                            <Border x:Name="PART_Indicator" HorizontalAlignment="Left" CornerRadius="2" Background="{TemplateBinding Foreground}" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Reusable waveform bar (cool blue-white). -->
+        <Style x:Key="WaveBar" TargetType="Rectangle">
+            <Setter Property="Width" Value="3" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="RadiusX" Value="1.5" />
+            <Setter Property="RadiusY" Value="1.5" />
+            <Setter Property="Fill" Value="{StaticResource WaveBarBrush}" />
+            <Setter Property="Margin" Value="1.6,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        </Style>
+    </Window.Resources>
+
+    <!-- Root is transparent (no fill) so the area around the pill is click-through; only the pill is
+         hit-testable. The window stays a fixed (expanded) size and the pill animates inside it, so the
+         expansion grows symmetrically from the centre instead of resizing the HWND. -->
+    <Grid Background="{x:Null}">
+        <Border x:Name="GlassShell" CornerRadius="{Binding IslandCornerRadius}" BorderThickness="1"
+                HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,10,0,0"
+                Width="266" Height="44"
+                MouseEnter="Pill_MouseEnter" MouseLeave="Pill_MouseLeave"
+                MouseLeftButtonDown="Pill_MouseLeftButtonDown">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="16" ShadowDepth="0" Opacity="0.4" Color="#000000" RenderingBias="Quality" />
+            </Border.Effect>
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="BorderBrush" Value="#22FFFFFF" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsDarkTheme}" Value="False">
+                            <Setter Property="BorderBrush" Value="#1E2A3A55" />
+                        </DataTrigger>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsLiquidGlass}" Value="True" />
+                                <Condition Binding="{Binding IsDarkTheme}" Value="True" />
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="BorderBrush" Value="#5CFFFFFF" />
+                        </MultiDataTrigger>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsLiquidGlass}" Value="True" />
+                                <Condition Binding="{Binding IsDarkTheme}" Value="False" />
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="BorderBrush" Value="#80FFFFFF" />
+                        </MultiDataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <Grid x:Name="GlassContent">
+                <!-- The glass fill is a separate layer so its opacity (the transparency slider) can be
+                     adjusted without fading the text/controls on top of it. -->
+                <Border x:Name="BackgroundLayer" CornerRadius="{Binding IslandInnerCornerRadius}" IsHitTestVisible="False"
+                        Opacity="{Binding GlassBackgroundOpacity}" Background="{Binding GlassBrush}" />
+                <!-- Liquid glass is now just translucent grey (the BackgroundLayer above with its opacity
+                     driven by the transparency slider) — no coloured glow/sheen/refraction gradients. -->
+                <Grid x:Name="CompactContent" Margin="16,0">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsCompact}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid Width="32" Height="32" VerticalAlignment="Center">
+                        <Grid.LayoutTransform><ScaleTransform ScaleX="{Binding AlbumScale}" ScaleY="{Binding AlbumScale}" /></Grid.LayoutTransform>
+                        <!-- Icon / album art — corner radius follows the Album shape setting -->
+                        <Border CornerRadius="{Binding CompactIconCorner}" Width="28" Height="28" Background="{StaticResource IconSurface}"
+                                BorderBrush="#685AA7FF" BorderThickness="1">
+                            <Border.Effect><DropShadowEffect BlurRadius="9" ShadowDepth="0" Opacity="0.38" Color="#5AA7FF" /></Border.Effect>
+                            <TextBlock Text="{Binding CompactGlyph}" FontFamily="Segoe Fluent Icons" FontSize="{Binding CompactGlyphFontSize}"
+                                       Foreground="{Binding AccentTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <Rectangle Width="28" Height="28" RadiusX="{Binding CompactAlbumRadius}" RadiusY="{Binding CompactAlbumRadius}"
+                                   Visibility="{Binding ShowCompactArt, Converter={StaticResource BoolToVisibility}}">
+                            <Rectangle.Fill><ImageBrush ImageSource="{Binding Artwork}" Stretch="UniformToFill" /></Rectangle.Fill>
+                        </Rectangle>
+                        <!-- Progress ring (media playback or timer countdown), tracing the album shape -->
+                        <Path Data="{Binding CompactRingGeometry}" Stroke="#2EFFFFFF" StrokeThickness="2.5"
+                              Visibility="{Binding ShowCompactRingTrack, Converter={StaticResource BoolToVisibility}}" />
+                        <Path Data="{Binding CompactRingGeometry}" Stroke="#5AA7FF" StrokeThickness="2.5" StrokeDashCap="Round"
+                              Visibility="{Binding ShowCompactMediaRing, Converter={StaticResource BoolToVisibility}}">
+                            <Path.StrokeDashArray>
+                                <MultiBinding Converter="{StaticResource RingProgress}">
+                                    <Binding Path="MediaProgress" />
+                                    <Binding Path="CompactRingPerimeterUnits" />
+                                </MultiBinding>
+                            </Path.StrokeDashArray>
+                        </Path>
+                        <Path Data="{Binding CompactRingGeometry}" Stroke="#43D49A" StrokeThickness="2.5" StrokeDashCap="Round"
+                              Visibility="{Binding ShowCompactTimerRing, Converter={StaticResource BoolToVisibility}}">
+                            <Path.StrokeDashArray>
+                                <MultiBinding Converter="{StaticResource RingProgress}">
+                                    <Binding Path="TimerProgress" />
+                                    <Binding Path="CompactRingPerimeterUnits" />
+                                </MultiBinding>
+                            </Path.StrokeDashArray>
+                        </Path>
+                    </Grid>
+                    <inf:MarqueeText Grid.Column="1" Text="{Binding CompactPrimaryText}" Active="{Binding ScrollTitles}" Margin="10,0,10,0"
+                                     FontFamily="{Binding UiFontFamily}" FontSize="{Binding CompactPrimaryFontSize}" FontWeight="SemiBold"
+                                     TextForeground="{Binding PrimaryTextBrush}" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Style="{StaticResource ChargingBadgeStyle}" Padding="7,3" Margin="0,0,7,0"
+                                Visibility="{Binding IsCharging, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE945;" FontFamily="Segoe Fluent Icons" FontSize="{Binding ChargingGlyphFontSize}" Foreground="#73F0C1" />
+                                <TextBlock Text="{Binding ChargingText}" Margin="4,0,0,0" FontSize="{Binding CompactChargingTextFontSize}" FontWeight="SemiBold" Foreground="#D8FFF1" />
+                            </StackPanel>
+                        </Border>
+                        <!-- RAM usage (optional) on the collapsed island -->
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,9,0"
+                                    Visibility="{Binding ShowCompactRam, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="RAM" FontFamily="{Binding UiFontFamily}" FontSize="{Binding CompactSecondaryFontSize}"
+                                       Foreground="{Binding SecondaryTextBrush}" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <TextBlock Text="{Binding RamText}" FontFamily="{Binding UiFontFamily}" FontSize="{Binding CompactSecondaryFontSize}"
+                                       FontWeight="SemiBold" Foreground="{Binding PrimaryTextBrush}" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding CompactSecondaryText}" FontFamily="{Binding UiFontFamily}"
+                                   FontSize="{Binding CompactSecondaryFontSize}" Foreground="{Binding SecondaryTextBrush}" VerticalAlignment="Center" />
+                        <!-- Camera presence status dot -->
+                        <Ellipse Width="7" Height="7" Margin="8,0,0,0" VerticalAlignment="Center"
+                                 Fill="{Binding VisionDotBrush}" ToolTip="{Binding VisionStatusText}"
+                                 Visibility="{Binding ShowVisionStatus, Converter={StaticResource BoolToVisibility}}" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- ============================================================================
+                     EXPANDED ISLAND — reference redesign
+                     Album · Media · Audio · Status, laid out left→right on the smoked shell.
+                     Section order (media/audio/status) still honours the ExpandedOrder setting.
+                     ============================================================================ -->
+                <Grid x:Name="ExpandedContent" Margin="18,14,18,14">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- ===== Album art ===== -->
+                    <Grid Grid.Column="0" Width="76" Height="76" Margin="0,0,16,0" VerticalAlignment="Center"
+                          Background="Transparent" Cursor="Hand" MouseLeftButtonUp="AlbumArt_Click">
+                        <Grid.LayoutTransform><ScaleTransform ScaleX="{Binding ExpandedAlbumScale}" ScaleY="{Binding ExpandedAlbumScale}" /></Grid.LayoutTransform>
+                        <Border CornerRadius="{Binding ExpandedIconCorner}" Background="{StaticResource IconSurface}" BorderBrush="#3A5AA7FF" BorderThickness="1">
+                            <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.45" Color="#000000" RenderingBias="Quality" /></Border.Effect>
+                            <TextBlock Text="&#xE8D6;" FontFamily="Segoe Fluent Icons" FontSize="26"
+                                       Foreground="#7EB8FF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <Rectangle RadiusX="{Binding ExpandedAlbumRadius}" RadiusY="{Binding ExpandedAlbumRadius}"
+                                   RenderOptions.BitmapScalingMode="HighQuality"
+                                   Visibility="{Binding ShowCameraPreview, Converter={StaticResource BoolToVisibility}}">
+                            <Rectangle.Fill><ImageBrush ImageSource="{Binding CameraPreview}" Stretch="UniformToFill" /></Rectangle.Fill>
+                        </Rectangle>
+                        <Rectangle RadiusX="{Binding ExpandedAlbumRadius}" RadiusY="{Binding ExpandedAlbumRadius}"
+                                   Visibility="{Binding HasArtwork, Converter={StaticResource BoolToVisibility}}">
+                            <Rectangle.Fill><ImageBrush ImageSource="{Binding Artwork}" Stretch="UniformToFill" /></Rectangle.Fill>
+                            <Rectangle.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.5" Color="#000000" RenderingBias="Quality" /></Rectangle.Effect>
+                        </Rectangle>
+                    </Grid>
+
+                    <!-- ===== Media ===== -->
+                    <Grid Grid.Column="{Binding MediaColumn}" MinWidth="356" MaxWidth="420" Margin="0,0,16,0" VerticalAlignment="Center"
+                          Visibility="{Binding ShowMedia, Converter={StaticResource BoolToVisibility}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- NOW PLAYING squircle status chip (not a pill) -->
+                        <Border Style="{StaticResource NowPlayingBadge}"
+                                Visibility="{Binding ShowNowPlaying, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="NOW PLAYING" FontFamily="{Binding UiFontFamily}" FontSize="9.5" FontWeight="SemiBold"
+                                       Foreground="{Binding SecondaryTextBrush}" />
+                        </Border>
+
+                        <!-- Title + explicit badge + favourite -->
+                        <Grid Grid.Row="1" Margin="0,7,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <inf:MarqueeText Text="{Binding MediaTitle}" Active="{Binding ScrollTitles}" MaxWidth="250"
+                                             FontFamily="{Binding UiFontFamily}" FontSize="{Binding MediaTitleFontSize}"
+                                             FontWeight="SemiBold" TextForeground="{Binding PrimaryTextBrush}" VerticalAlignment="Center" />
+                            <Border Grid.Column="1" Margin="8,1,0,0" VerticalAlignment="Center" Width="17" Height="17" CornerRadius="4"
+                                    Background="{StaticResource ExplicitFillBrush}" BorderBrush="#33FFFFFF" BorderThickness="1"
+                                    Visibility="{Binding ShowExplicitBadge, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="E" FontSize="10" FontWeight="SemiBold" Foreground="{Binding SecondaryTextBrush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <Button Grid.Column="3" Content="{Binding FavoriteGlyph}" Command="{Binding ToggleFavoriteCommand}"
+                                    Style="{StaticResource CircleButton}" Width="30" Height="30" FontSize="14"
+                                    Background="Transparent" BorderThickness="0" Foreground="#E58AA0"
+                                    ToolTip="Favourite" AutomationProperties.Name="Favourite" />
+                        </Grid>
+
+                        <!-- Artist -->
+                        <TextBlock Grid.Row="2" Text="{Binding MediaArtist}" Margin="0,3,0,0" HorizontalAlignment="Left" MaxWidth="320"
+                                   FontFamily="{Binding UiFontFamily}" FontSize="{Binding MediaArtistFontSize}" Foreground="{Binding SecondaryTextBrush}"
+                                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="34" />
+
+                        <!-- Progress: elapsed | bar | total/remaining -->
+                        <Grid Grid.Row="3" Margin="0,9,0,0" Visibility="{Binding ShowMediaTimes, Converter={StaticResource BoolToVisibility}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding MediaElapsedText}" VerticalAlignment="Center" Margin="0,0,10,0"
+                                       FontFamily="{Binding UiFontFamily}" FontSize="10" Foreground="{Binding SecondaryTextBrush}" />
+                            <Border Grid.Column="1" Background="Transparent" Cursor="Hand" Padding="0,8" VerticalAlignment="Center"
+                                    MouseLeftButtonDown="ProgressBar_Seek">
+                                <ProgressBar Value="{Binding MediaProgress, Mode=OneWay}" Style="{StaticResource SeekBar}" IsHitTestVisible="False" />
+                            </Border>
+                            <TextBlock Grid.Column="2" Text="{Binding MediaTrailingTimeText}" VerticalAlignment="Center" Margin="10,0,0,0"
+                                       FontFamily="{Binding UiFontFamily}" FontSize="10" Foreground="{Binding SecondaryTextBrush}" />
+                        </Grid>
+
+                        <!-- Transport: 10s rewind · prev · play/pause · next · 10s forward -->
+                        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,9,0,0">
+                            <!-- 10s rewind: a counter-clockwise circular-arrow glyph (mirrored Refresh) with a
+                                 "10" overlaid. Distinct from prev/next; disables + explains via tooltip when the
+                                 source can't seek. -->
+                            <Button Command="{Binding SeekBackCommand}" Style="{StaticResource SeekButton}"
+                                    ToolTip="{Binding SeekBackTooltip}" AutomationProperties.Name="Back 10 seconds">
+                                <Grid Width="24" Height="24">
+                                    <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons" FontSize="21" RenderTransformOrigin="0.5,0.5"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <TextBlock.RenderTransform><ScaleTransform ScaleX="-1" /></TextBlock.RenderTransform>
+                                    </TextBlock>
+                                    <TextBlock Text="10" FontFamily="{Binding UiFontFamily}" FontSize="7.5" FontWeight="SemiBold"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,1,0,0" />
+                                </Grid>
+                            </Button>
+                            <Button Content="&#xE892;" Command="{Binding PreviousCommand}" Style="{StaticResource CircleButton}"
+                                    Width="40" Height="40" FontSize="15" Margin="6,0" AutomationProperties.Name="Previous track" />
+                            <Button Content="{Binding PlayPauseGlyph}" Command="{Binding PlayPauseCommand}" Style="{StaticResource CirclePrimaryButton}"
+                                    Margin="8,0" AutomationProperties.Name="Play or pause" />
+                            <Button Content="&#xE893;" Command="{Binding NextCommand}" Style="{StaticResource CircleButton}"
+                                    Width="40" Height="40" FontSize="15" Margin="6,0" AutomationProperties.Name="Next track" />
+                            <!-- 10s forward: clockwise circular-arrow glyph (Refresh) with a "10" overlaid. -->
+                            <Button Command="{Binding SeekForwardCommand}" Style="{StaticResource SeekButton}"
+                                    ToolTip="{Binding SeekForwardTooltip}" AutomationProperties.Name="Forward 10 seconds">
+                                <Grid Width="24" Height="24">
+                                    <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons" FontSize="21"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    <TextBlock Text="10" FontFamily="{Binding UiFontFamily}" FontSize="7.5" FontWeight="SemiBold"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,1,0,0" />
+                                </Grid>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- ===== Audio ===== -->
+                    <Border Grid.Column="{Binding VolumeColumn}" Width="290" Margin="0,0,16,0" Padding="16,12" VerticalAlignment="Center"
+                            CornerRadius="{StaticResource RadiusCard}" Background="{StaticResource CardFillBrush}"
+                            BorderBrush="{StaticResource CardStrokeBrush}" BorderThickness="1"
+                            Visibility="{Binding ShowVolume, Converter={StaticResource BoolToVisibility}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <!-- speaker · 28% · − · + -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button Content="{Binding VolumeGlyph}" Command="{Binding ToggleMuteCommand}" Style="{StaticResource CircleButton}"
+                                        Width="38" Height="38" FontSize="16" AutomationProperties.Name="Toggle system mute" />
+                                <TextBlock Grid.Column="1" Text="{Binding VolumeText}" VerticalAlignment="Center" Margin="12,0,0,0" HorizontalAlignment="Left"
+                                           Foreground="{Binding PrimaryTextBrush}" FontFamily="{Binding UiFontFamily}" FontWeight="SemiBold" FontSize="25" />
+                                <Button Grid.Column="2" Content="&#xE738;" Command="{Binding AdjustVolumeCommand}" CommandParameter="-2"
+                                        Style="{StaticResource CircleButton}" Width="38" Height="38" FontSize="15" AutomationProperties.Name="Volume down" />
+                                <Button Grid.Column="3" Content="&#xE710;" Command="{Binding AdjustVolumeCommand}" CommandParameter="2"
+                                        Style="{StaticResource CircleButton}" Width="38" Height="38" FontSize="15" AutomationProperties.Name="Volume up" />
+                            </Grid>
+
+                            <!-- waveform / equaliser -->
+                            <Grid Grid.Row="1" Height="46" Margin="0,8,0,8" ClipToBounds="True">
+                                <!-- status (muted / idle / unavailable) -->
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            Visibility="{Binding ShowAudioStatusText, Converter={StaticResource BoolToVisibility}}">
+                                    <Ellipse Width="5" Height="5" Fill="#5AA7FF" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding AudioStatusText}" Margin="7,0,0,0" FontSize="{Binding VolumeFontSize}"
+                                               Foreground="{Binding SecondaryTextBrush}" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <!-- real spectrum (WASAPI loopback) -->
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            Visibility="{Binding UseRealSpectrum, Converter={StaticResource BoolToVisibility}}">
+                                    <Rectangle Style="{StaticResource WaveBar}"><Rectangle.RenderTransform><ScaleTransform ScaleY="{Binding SpectrumBand0}" /></Rectangle.RenderTransform></Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}"><Rectangle.RenderTransform><ScaleTransform ScaleY="{Binding SpectrumBand1}" /></Rectangle.RenderTransform></Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}"><Rectangle.RenderTransform><ScaleTransform ScaleY="{Binding SpectrumBand2}" /></Rectangle.RenderTransform></Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}"><Rectangle.RenderTransform><ScaleTransform ScaleY="{Binding SpectrumBand3}" /></Rectangle.RenderTransform></Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}"><Rectangle.RenderTransform><ScaleTransform ScaleY="{Binding SpectrumBand4}" /></Rectangle.RenderTransform></Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}"><Rectangle.RenderTransform><ScaleTransform ScaleY="{Binding SpectrumBand5}" /></Rectangle.RenderTransform></Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}"><Rectangle.RenderTransform><ScaleTransform ScaleY="{Binding SpectrumBand6}" /></Rectangle.RenderTransform></Rectangle>
+                                </StackPanel>
+                                <!-- restrained synthesised wave (audio active, no real spectrum) -->
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            Visibility="{Binding ShowAnimatedWave, Converter={StaticResource BoolToVisibility}}">
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.2" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.2" To="0.4" Duration="0:0:0.46" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.28" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.28" To="0.55" Duration="0:0:0.4" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.1" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.25" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.25" To="0.5" Duration="0:0:0.52" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.04" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.35" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.35" To="0.7" Duration="0:0:0.36" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.16" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.31" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.31" To="0.62" Duration="0:0:0.5" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.02" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.42" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.42" To="0.85" Duration="0:0:0.34" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.12" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.46" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.46" To="0.92" Duration="0:0:0.42" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.06" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.5" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.5" To="1" Duration="0:0:0.38" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.46" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.46" To="0.92" Duration="0:0:0.44" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.08" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.42" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.42" To="0.85" Duration="0:0:0.34" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.14" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.31" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.31" To="0.62" Duration="0:0:0.5" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.02" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.35" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.35" To="0.7" Duration="0:0:0.36" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.16" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.25" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.25" To="0.5" Duration="0:0:0.52" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.05" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.28" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.28" To="0.55" Duration="0:0:0.4" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.1" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                    <Rectangle Style="{StaticResource WaveBar}">
+                                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.2" /></Rectangle.RenderTransform>
+                                        <Rectangle.Triggers><EventTrigger RoutedEvent="Loaded"><BeginStoryboard><Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.2" To="0.4" Duration="0:0:0.46" AutoReverse="True" RepeatBehavior="Forever" BeginTime="0:0:0.07" />
+                                        </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>
+                                    </Rectangle>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- output device -->
+                            <Border Grid.Row="2" Background="Transparent" Cursor="Hand" Padding="0,2" MouseLeftButtonUp="OutputDevice_Click"
+                                    ToolTip="Change output device">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Output" VerticalAlignment="Center" FontFamily="{Binding UiFontFamily}" FontSize="11"
+                                               Foreground="{Binding SecondaryTextBrush}" />
+                                    <TextBlock Grid.Column="1" Text="{Binding OutputDeviceText}" VerticalAlignment="Center" Margin="12,0,8,0" HorizontalAlignment="Left"
+                                               FontFamily="{Binding UiFontFamily}" FontSize="11" Foreground="{Binding PrimaryTextBrush}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="2" Text="&#xE76C;" FontFamily="Segoe Fluent Icons" FontSize="11" VerticalAlignment="Center"
+                                               Foreground="{Binding SecondaryTextBrush}" />
+                                </Grid>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <!-- ===== Status ===== -->
+                    <Grid Grid.Column="{Binding StatusColumn}" MinWidth="272" VerticalAlignment="Center">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- clock + weather -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center" Visibility="{Binding ShowClock, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding ClockTimeText}" FontFamily="{Binding UiFontFamily}" FontSize="33" FontWeight="SemiBold"
+                                               Foreground="{Binding PrimaryTextBrush}" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding ClockAmPm}" Margin="7,0,0,5" VerticalAlignment="Bottom" FontFamily="{Binding UiFontFamily}"
+                                               FontSize="13" FontWeight="SemiBold" Foreground="{Binding AccentTextBrush}" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding DateLongText}" Margin="2,1,0,0" FontFamily="{Binding UiFontFamily}" FontSize="11"
+                                           Foreground="{Binding SecondaryTextBrush}"
+                                           Visibility="{Binding ShowDate, Converter={StaticResource BoolToVisibility}}" />
+                            </StackPanel>
+                            <Border Grid.Column="1" VerticalAlignment="Center" Margin="14,0,0,0" Padding="12,8" CornerRadius="{StaticResource RadiusMini}"
+                                    Background="{StaticResource MiniFillBrush}" BorderBrush="{StaticResource MiniStrokeBrush}" BorderThickness="1"
+                                    Visibility="{Binding ShowWeather, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding WeatherGlyph}" FontFamily="Segoe Fluent Icons" FontSize="20"
+                                               Foreground="{Binding SecondaryTextBrush}" VerticalAlignment="Center" />
+                                    <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding WeatherTempText}" FontFamily="{Binding UiFontFamily}" FontSize="16" FontWeight="SemiBold"
+                                                   Foreground="{Binding PrimaryTextBrush}" />
+                                        <TextBlock Text="{Binding WeatherDescText}" FontFamily="{Binding UiFontFamily}" FontSize="10"
+                                                   Foreground="{Binding SecondaryTextBrush}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <!-- RAM + NET cards -->
+                        <Grid Grid.Row="1" Margin="0,11,0,0" Visibility="{Binding ShowSystemMonitor, Converter={StaticResource BoolToVisibility}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Margin="0,0,6,0" Padding="12,8" CornerRadius="{StaticResource RadiusMini}"
+                                    Background="{StaticResource MiniFillBrush}" BorderBrush="{StaticResource MiniStrokeBrush}" BorderThickness="1">
+                                <StackPanel>
+                                    <Grid>
+                                        <TextBlock Text="RAM" FontFamily="{Binding UiFontFamily}" FontSize="10" Foreground="{Binding SecondaryTextBrush}" HorizontalAlignment="Left" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding RamText}" FontFamily="{Binding UiFontFamily}" FontSize="13" FontWeight="SemiBold" Foreground="{Binding PrimaryTextBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <ProgressBar Value="{Binding RamPercentValue, Mode=OneWay}" Maximum="100" Height="4" Margin="0,7,0,0" Style="{StaticResource MiniBar}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="1" Margin="6,0,0,0" Padding="12,8" CornerRadius="{StaticResource RadiusMini}"
+                                    Background="{StaticResource MiniFillBrush}" BorderBrush="{StaticResource MiniStrokeBrush}" BorderThickness="1">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="NET" FontFamily="{Binding UiFontFamily}" FontSize="10" Foreground="{Binding SecondaryTextBrush}" />
+                                        <TextBlock Text="{Binding NetText}" FontFamily="{Binding UiFontFamily}" FontSize="13" FontWeight="SemiBold" Foreground="{Binding PrimaryTextBrush}" />
+                                    </StackPanel>
+                                    <Polyline Grid.Column="1" VerticalAlignment="Center" Points="{Binding NetSparkline}" Stroke="{Binding AccentTextBrush}"
+                                              StrokeThickness="1.5" StrokeLineJoin="Round" Width="46" Height="16" />
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <!-- secondary widgets (battery / vision / stocks / countdown / meeting / world clocks) -->
+                        <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,9,0,0"
+                                   Visibility="{Binding ShowStatusExtras, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center"
+                                        Visibility="{Binding ShowBatteryLevel, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="{Binding BatteryGlyph}" FontFamily="Segoe Fluent Icons" FontSize="{Binding BatteryGlyphFontSize}" Foreground="{Binding AccentTextBrush}" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding BatteryText}" Margin="5,0,0,0" FontSize="{Binding BatteryTextFontSize}" Foreground="{Binding SecondaryTextBrush}" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <Border Style="{StaticResource ChargingBadgeStyle}" Padding="8,2" Margin="0,0,12,0" VerticalAlignment="Center"
+                                    Visibility="{Binding IsCharging, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE945;" FontFamily="Segoe Fluent Icons" FontSize="{Binding ChargingGlyphFontSize}" Foreground="#7DF0C8" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding ChargingText}" Margin="5,0,0,0" FontSize="{Binding ChargingTextFontSize}" FontWeight="SemiBold" Foreground="#E6FFF6" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center"
+                                        Visibility="{Binding ShowVisionStatus, Converter={StaticResource BoolToVisibility}}">
+                                <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{Binding VisionDotBrush}" />
+                                <TextBlock Text="{Binding VisionStatusText}" Margin="6,0,0,0" FontSize="{Binding VisionTextFontSize}" Foreground="{Binding SecondaryTextBrush}" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <ItemsControl ItemsSource="{Binding Stocks}" Margin="0,0,6,0" VerticalAlignment="Center"
+                                          Visibility="{Binding ShowStocks, Converter={StaticResource BoolToVisibility}}">
+                                <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate><DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,9,0">
+                                        <TextBlock Text="{Binding Symbol}" FontSize="10" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,3,0"
+                                                   Foreground="{Binding DataContext.SecondaryTextBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                        <TextBlock Text="{Binding PriceText}" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0"
+                                                   Foreground="{Binding DataContext.PrimaryTextBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                        <TextBlock Text="{Binding ChangeText}" FontSize="9" VerticalAlignment="Center">
+                                            <TextBlock.Style><Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="#FF6B6B" />
+                                                <Style.Triggers><DataTrigger Binding="{Binding Up}" Value="True"><Setter Property="Foreground" Value="#43E08A" /></DataTrigger></Style.Triggers>
+                                            </Style></TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="{Binding CountdownText}" Margin="0,0,12,0" FontSize="11" VerticalAlignment="Center"
+                                       Foreground="{Binding PrimaryTextBrush}"
+                                       Visibility="{Binding ShowCountdown, Converter={StaticResource BoolToVisibility}}" />
+                            <StackPanel Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center"
+                                        Visibility="{Binding ShowNextMeeting, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="{Binding MeetingTitle}" FontSize="11" Foreground="{Binding PrimaryTextBrush}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="120" />
+                                <TextBlock Text="{Binding MeetingWhen}" Margin="6,0,0,0" FontSize="10" Foreground="{Binding SecondaryTextBrush}" VerticalAlignment="Center" />
+                                <Border Background="{Binding AccentSoftBrush}" CornerRadius="6" Padding="8,2" Margin="6,0,0,0" Cursor="Hand"
+                                        MouseLeftButtonUp="JoinMeeting_Click" Visibility="{Binding HasMeetingJoin, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock Text="Join" FontSize="10" FontWeight="SemiBold" Foreground="{Binding AccentTextBrush}" />
+                                </Border>
+                            </StackPanel>
+                            <ItemsControl ItemsSource="{Binding WorldClocks}" VerticalAlignment="Center"
+                                          Visibility="{Binding ShowWorldClocks, Converter={StaticResource BoolToVisibility}}">
+                                <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate><DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,10,0">
+                                        <TextBlock Text="{Binding Label}" FontSize="9" VerticalAlignment="Center" Margin="0,0,3,0"
+                                                   Foreground="{Binding DataContext.SecondaryTextBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                        <TextBlock Text="{Binding Time}" FontSize="10" VerticalAlignment="Center"
+                                                   Foreground="{Binding DataContext.PrimaryTextBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                    </StackPanel>
+                                </DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="{Binding BatteryTimeText}" FontSize="10" VerticalAlignment="Center"
+                                       Foreground="{Binding SecondaryTextBrush}"
+                                       Visibility="{Binding ShowBatteryTime, Converter={StaticResource BoolToVisibility}}" />
+                        </WrapPanel>
+
+                        <!-- quick actions: quick-launch · camera · timer · settings · collapse · menu -->
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,11,0,0">
+                            <ItemsControl ItemsSource="{Binding LaunchItems}" VerticalAlignment="Center"
+                                          Visibility="{Binding ShowQuickLaunch, Converter={StaticResource BoolToVisibility}}">
+                                <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate><DataTemplate>
+                                    <Button Content="{Binding Glyph}" ToolTip="{Binding Name}" Style="{StaticResource CircleButton}" Width="40" Height="40"
+                                            FontFamily="Segoe UI Variable Display" FontSize="14"
+                                            Command="{Binding DataContext.LaunchCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding Path}" />
+                                </DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Button Content="&#xE722;" Click="VisionButton_Click" Style="{StaticResource CircleButton}"
+                                    ToolTip="Camera presence" AutomationProperties.Name="Camera presence settings" />
+                            <Button Content="&#xE916;" Click="TimerButton_Click" Style="{StaticResource CircleButton}"
+                                    Visibility="{Binding ShowTimerAlarm, Converter={StaticResource BoolToVisibility}}"
+                                    ToolTip="Timer and alarm" AutomationProperties.Name="Timer and alarm" />
+                            <Button Content="&#xE713;" Click="SettingsButton_Click" Style="{StaticResource CircleButton}"
+                                    ToolTip="Settings" AutomationProperties.Name="Settings" />
+                            <Button Content="&#xE73F;" Click="CollapseButton_Click" Style="{StaticResource CircleButton}"
+                                    ToolTip="Collapse" AutomationProperties.Name="Collapse island" />
+                            <Button x:Name="MenuButton" Content="&#xE700;" PreviewMouseLeftButtonDown="MenuButton_MouseDown" Style="{StaticResource CircleButton}"
+                                    ToolTip="More — drag to move the island" AutomationProperties.Name="More options">
+                                <Button.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Recenter to top center" Click="RecenterMenu_Click" />
+                                        <MenuItem Header="Clipboard history" Click="ClipboardMenu_Click" />
+                                        <Separator />
+                                        <MenuItem Header="Collapse island" Click="CollapseMenu_Click" />
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+
+                <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,5,8,0" Padding="5,2"
+                        CornerRadius="5" Background="#B0202630"
+                        Visibility="{Binding DebugOverlay, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock Text="DEBUG" FontSize="8" Foreground="#FFB14E" FontWeight="Bold" />
+                </Border>
+
+            </Grid>
+        </Border>
+
+        <!-- Transient notification banner. Lives at the window (root) level rather than inside the fixed-
+             width pill, so it sizes to its own text (up to MaxWidth) instead of being clipped to the pill
+             width. Click-through so the pill underneath still receives hover/clicks while it's shown.
+             Layers drive the NotifIntro storyboard: NotifScale (pop/spring), NotifGlow (accent glow),
+             NotifBlur (content blur-in) and NotifSweep (accent light sweep). -->
+        <Grid x:Name="NotifBanner" VerticalAlignment="Top" HorizontalAlignment="Center" MaxWidth="520"
+              Margin="0,8,0,0" IsHitTestVisible="False" RenderTransformOrigin="0.5,0.5"
+              Visibility="{Binding ShowNotification, Converter={StaticResource BoolToVisibility}}">
+            <Grid.RenderTransform><ScaleTransform x:Name="NotifScale" ScaleX="1" ScaleY="1" /></Grid.RenderTransform>
+            <Border x:Name="NotifCard" CornerRadius="14" Padding="14,8" ClipToBounds="True"
+                    Background="#F21B222D" BorderBrush="{Binding PanelBorderBrush}" BorderThickness="1">
+                <Border.Effect><DropShadowEffect x:Name="NotifGlow" BlurRadius="16" ShadowDepth="0" Opacity="0.45" Color="#5AA7FF" /></Border.Effect>
+                <Grid>
+                    <StackPanel x:Name="NotifContent">
+                        <StackPanel.Effect><BlurEffect x:Name="NotifBlur" Radius="0" /></StackPanel.Effect>
+                        <TextBlock Text="{Binding NotificationApp}" FontSize="9" FontWeight="SemiBold" Foreground="{Binding AccentTextBrush}" />
+                        <TextBlock Text="{Binding NotificationTitle}" FontSize="13" FontWeight="SemiBold" Foreground="{Binding PrimaryTextBrush}" TextTrimming="CharacterEllipsis" />
+                        <!-- Wraps to ~2 lines then ellipsises, instead of being cut off on one line. -->
+                        <TextBlock Text="{Binding NotificationBody}" FontSize="11" Foreground="{Binding SecondaryTextBrush}" Margin="0,1,0,0"
+                                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="32" />
+                    </StackPanel>
+                    <Rectangle x:Name="NotifSweepRect" IsHitTestVisible="False" Opacity="0">
+                        <Rectangle.Fill>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                <LinearGradientBrush.RelativeTransform><TranslateTransform x:Name="NotifSweep" X="-1" /></LinearGradientBrush.RelativeTransform>
+                                <GradientStop Color="#005AA7FF" Offset="0.30" />
+                                <GradientStop x:Name="NotifSweepStop" Color="#705AA7FF" Offset="0.50" />
+                                <GradientStop Color="#005AA7FF" Offset="0.70" />
+                            </LinearGradientBrush>
+                        </Rectangle.Fill>
+                    </Rectangle>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

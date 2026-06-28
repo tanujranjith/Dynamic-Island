@@ -1,0 +1,36 @@
+# dynamic_island_vision.py dependencies
+#
+# SETUP
+# ─────
+#   python -m venv .venv
+#   .venv\Scripts\activate
+#   pip install -r requirements-vision.txt
+#   python dynamic_island_vision.py
+#
+# The original DynamicIsland_Premium.py is NOT affected by this file.
+
+# ── Core UI (already required by the original app) ────────────────────────────
+pillow>=10.0.0
+
+# ── System info ───────────────────────────────────────────────────────────────
+psutil>=5.9.0
+
+# ── Camera & person detection (new for vision version) ───────────────────────
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# ── MediaPipe face detection (strongly recommended, install if possible) ───────
+# Provides a much faster (~5 ms/frame) and more accurate face detector than the
+# built-in Haar cascade.  Works at angles, not just frontal faces.
+# The app auto-detects its presence and falls back to Haar if not installed.
+mediapipe>=0.10.0
+
+# ── Windows media controls (SMTC) – optional but recommended ─────────────────
+# Provides Now-Playing metadata and media transport controls.
+# Requires Python 3.11 on Windows; harmlessly skipped on other platforms.
+winsdk>=1.0.0b10
+
+# ── System volume control – optional ─────────────────────────────────────────
+# Enables the in-island volume +/- controls.
+pycaw>=20240210
+comtypes>=1.4.4

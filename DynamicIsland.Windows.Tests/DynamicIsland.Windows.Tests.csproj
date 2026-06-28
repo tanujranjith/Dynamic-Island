@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The decision policy is pure (no OpenCV/WPF), so we link the sources instead of referencing the
+         WPF app — keeps the test host light and avoids pulling native OpenCV into the runner. -->
+    <Compile Include="..\DynamicIsland.Windows\Models\VisionPolicy.cs" Link="VisionPolicy.cs" />
+    <Compile Include="..\DynamicIsland.Windows\Models\VisionState.cs" Link="VisionState.cs" />
+    <Compile Include="..\DynamicIsland.Windows\Infrastructure\SeekMath.cs" Link="SeekMath.cs" />
+  </ItemGroup>
+</Project>

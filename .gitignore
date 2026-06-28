@@ -1,0 +1,26 @@
+# ── Build output ───────────────────────────────────────────
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+
+# ── Workspace-local .NET SDK / NuGet (do NOT commit) ────────
+.dotnet/
+.dotnet-home/
+.nuget/
+
+# ── Published / self-contained binaries (too large for git) ─
+# Ship these via GitHub Releases, not the repo.
+*.exe
+*.dll
+*.pdb
+
+# ── Visual Studio / Rider ──────────────────────────────────
+.vs/
+.idea/
+*.user
+*.suo
+
+# ── Logs & misc ────────────────────────────────────────────
+*.log
+Thumbs.db
+.DS_Store
