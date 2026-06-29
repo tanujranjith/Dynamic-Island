@@ -1,0 +1,53 @@
+name: Release
+
+# Builds the self-contained Windows .exe and publishes it as a GitHub Release
+# asset named DynamicIsland.exe — which is exactly what the README's download
+# button (releases/latest/download/DynamicIsland.exe) points at.
+#
+# Trigger either by pushing a version tag:   git tag v1.0.0 && git push origin v1.0.0
+# or manually from the Actions tab (Run workflow → enter a tag like v1.0.0).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: true
+        default: v1.0.0
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish self-contained single-file exe
+        run: dotnet publish .\DynamicIsland.Windows\DynamicIsland.Windows.csproj -c Release -r win-x64
+
+      - name: Stage asset as DynamicIsland.exe
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse -Path .\DynamicIsland.Windows\bin\Release -Filter DynamicIsland.Windows.exe |
+                 Where-Object { $_.FullName -match '\\publish\\' } | Select-Object -First 1
+          if (-not $exe) { throw "published exe not found" }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $exe.FullName dist\DynamicIsland.exe
+          "Staged: $((Get-Item dist\DynamicIsland.exe).Length / 1MB) MB"
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: dist/DynamicIsland.exe
