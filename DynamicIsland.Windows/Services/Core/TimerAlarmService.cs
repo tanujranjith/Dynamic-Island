@@ -2,6 +2,7 @@ using System.Media;
 using System.Text.Json;
 using System.Windows.Threading;
 using DynamicIsland.Windows.Models;
+using DynamicIsland.Windows.Infrastructure;
 
 namespace DynamicIsland.Windows.Services;
 
@@ -14,349 +15,140 @@ public sealed class TimerAlarmEventArgs(string name, string title, string messag
 
 public sealed class TimerAlarmService : IDisposable
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-    private static readonly TimeSpan AlarmTimeout = TimeSpan.FromMinutes(1);
-    private static readonly TimeSpan TimerDoneVisibility = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan ActiveTickInterval = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan IdleTickInterval = TimeSpan.FromSeconds(30);
     private readonly LoggingService _log;
-    private readonly DispatcherTimer _tickTimer = new(DispatcherPriority.Background)
-    {
-        // The UI displays whole seconds, so a twice-per-second tick keeps it responsive
-        // without waking the dispatcher five times per second for an inactive timer.
-        Interval = TimeSpan.FromMilliseconds(500)
-    };
     private readonly string _statePath;
+    private readonly DispatcherTimer _tickTimer = new(DispatcherPriority.Background);
     private System.Threading.Timer? _soundTimer;
-
+    private readonly TimerEngine _engine;
+    private DateTimeOffset _lastTick = DateTimeOffset.Now;
     public event EventHandler? Changed;
     public event EventHandler<TimerAlarmEventArgs>? EventRaised;
-    public TimerAlarmSnapshot State { get; private set; } = new();
-
-    public TimerAlarmService(LoggingService log)
+    public TimerAlarmSnapshot State => _engine.State;
+    public string StorageWarning { get; private set; } = "";
+    private bool _readOnly;
+    public TimerAlarmService(LoggingService log, string? statePath = null)
     {
         _log = log;
-        var directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DynamicIsland.Windows");
-        Directory.CreateDirectory(directory);
-        _statePath = Path.Combine(directory, "timer-alarm.json");
-        Load();
+        _statePath = statePath ?? Path.Combine(AppDataPaths.Root, "timer-alarm.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_statePath))!);
+        var state = new TimerAlarmSnapshot();
+        if (File.Exists(_statePath))
+        {
+            try
+            {
+                var json = File.ReadAllText(_statePath);
+                state = TimerEngine.Deserialize(json);
+                using var document = JsonDocument.Parse(json);
+                if (!document.RootElement.TryGetProperty("Version", out _) && !File.Exists(_statePath + ".pre-v2.bak"))
+                    File.Copy(_statePath, _statePath + ".pre-v2.bak", false);
+            }
+            catch (NotSupportedException ex) { _readOnly = true; StorageWarning = ex.Message; }
+            catch (Exception ex)
+            {
+                // Preserve unreadable data; never silently replace it on disposal.
+                _readOnly = true;
+                StorageWarning = "Timer storage could not be loaded. Original data is preserved; changes are temporary.";
+                _log.Error(StorageWarning, ex);
+            }
+        }
+        _engine = new TimerEngine(state);
+        _engine.Tick(recover: true);
+        Save();
         _tickTimer.Tick += (_, _) => Tick();
+        Microsoft.Win32.SystemEvents.PowerModeChanged += PowerChanged;
+        Microsoft.Win32.SystemEvents.TimeChanged += TimeChanged;
     }
-
-    public void Start()
+    private void TimeChanged(object? sender, EventArgs e) => _tickTimer.Dispatcher.BeginInvoke(() =>
     {
-        UpdateTickInterval();
-        _tickTimer.Start();
-    }
-
-    public TimeSpan TimerRemaining
-    {
-        get
-        {
-            var timer = State.Timer;
-            if (timer.Phase == TimerPhase.Paused)
-                return TimeSpan.FromSeconds(Math.Max(0, timer.PausedRemainingSeconds));
-            if (timer.Phase != TimerPhase.Running || timer.StartedAt is null)
-                return timer.Phase == TimerPhase.Completed
-                    ? TimeSpan.Zero : TimeSpan.FromSeconds(Math.Max(0, timer.TotalSeconds));
-            var elapsed = (DateTimeOffset.Now - timer.StartedAt.Value).TotalSeconds + timer.AccumulatedSeconds;
-            return TimeSpan.FromSeconds(Math.Max(0, timer.TotalSeconds - elapsed));
-        }
-    }
-
-    public double TimerProgress => State.Timer.TotalSeconds <= 0 ? 0 :
-        Math.Clamp(1 - TimerRemaining.TotalSeconds / State.Timer.TotalSeconds, 0, 1);
-
-    public void StartTimer(TimeSpan duration, string? label = null)
-    {
-        StopSound();
-        State.Timer = new TimerState
-        {
-            Phase = TimerPhase.Running,
-            Label = label?.Trim() ?? string.Empty,
-            TotalSeconds = Math.Max(1, duration.TotalSeconds),
-            StartedAt = DateTimeOffset.Now
-        };
+        _engine.Tick(true);
+        _lastTick = DateTimeOffset.Now;
         SaveAndNotify();
-    }
-
-    public void PauseTimer()
+    });
+    private void PowerChanged(object sender, Microsoft.Win32.PowerModeChangedEventArgs e)
     {
-        var timer = State.Timer;
-        if (timer.Phase != TimerPhase.Running || timer.StartedAt is null) return;
-        timer.AccumulatedSeconds += (DateTimeOffset.Now - timer.StartedAt.Value).TotalSeconds;
-        timer.PausedRemainingSeconds = Math.Max(0, timer.TotalSeconds - timer.AccumulatedSeconds);
-        timer.StartedAt = null;
-        timer.Phase = TimerPhase.Paused;
-        SaveAndNotify();
+        if (e.Mode == Microsoft.Win32.PowerModes.Resume)
+            _tickTimer.Dispatcher.BeginInvoke(() => { _engine.Tick(true); _lastTick = DateTimeOffset.Now; SaveAndNotify(); });
     }
-
-    public void ResumeTimer()
-    {
-        var timer = State.Timer;
-        if (timer.Phase != TimerPhase.Paused) return;
-        timer.StartedAt = DateTimeOffset.Now;
-        timer.Phase = TimerPhase.Running;
-        SaveAndNotify();
-    }
-
-    public void ResetTimer()
-    {
-        StopSound();
-        var previous = State.Timer;
-        State.Timer = new TimerState { Label = previous.Label, TotalSeconds = previous.TotalSeconds };
-        SaveAndNotify();
-    }
-
-    public void CancelTimer()
-    {
-        StopSound();
-        State.Timer = new TimerState();
-        SaveAndNotify();
-    }
-
-    public void AcknowledgeTimer()
-    {
-        StopSound();
-        State.Timer.CompletionAcknowledged = true;
-        SaveAndNotify();
-    }
-
+    public void Start() { UpdateTickInterval(); _tickTimer.Start(); }
+    public TimerState? DisplayTimer(Guid? pin = null) => _engine.DisplayTimer(pin);
+    public TimeSpan Remaining(TimerState timer) => _engine.GetRemaining(timer);
+    public TimeSpan TimerRemaining => Remaining(State.Timer);
+    public double TimerProgress => State.Timer.TotalSeconds <= 0 ? 0 : Math.Clamp(1 - TimerRemaining.TotalSeconds / State.Timer.TotalSeconds, 0, 1);
+    public void SelectTimer(Guid id) { State.SelectedTimerId = id; Changed?.Invoke(this, EventArgs.Empty); }
+    public void SelectAlarm(Guid? id) { State.SelectedAlarmId = id; Changed?.Invoke(this, EventArgs.Empty); }
+    public void StartTimer(TimeSpan duration, string? label = null) { _engine.Add(duration, label); SaveAndNotify(); }
+    public void PauseTimer() => PauseTimer(State.Timer.Id);
+    public void PauseTimer(Guid id) { _engine.Pause(id); SaveAndNotify(); }
+    public void ResumeTimer() => ResumeTimer(State.Timer.Id);
+    public void ResumeTimer(Guid id) { _engine.Resume(id); SaveAndNotify(); }
+    public void ResetTimer() => RestartTimer(State.Timer.Id);
+    public void RestartTimer(Guid id) { _engine.Restart(id); SaveAndNotify(); }
+    public void CancelTimer() => CancelTimer(State.Timer.Id);
+    public void CancelTimer(Guid id) { State.Timers.RemoveAll(t => t.Id == id); SaveAndNotify(); }
+    public void AcknowledgeTimer() => AcknowledgeTimer(State.Timer.Id);
+    public void AcknowledgeTimer(Guid id)
+    { if (State.Timers.FirstOrDefault(t => t.Id == id) is { } timer) timer.CompletionAcknowledged = true; SaveAndNotify(); }
+    public void SavePreset(string label, double seconds)
+    { State.Presets.Add(new(Guid.NewGuid(), string.IsNullOrWhiteSpace(label) ? $"{seconds / 60:0.#} minutes" : label.Trim(), Math.Clamp(seconds, 1, 86400))); SaveAndNotify(); }
+    public void DeletePreset(Guid id) { State.Presets.RemoveAll(p => p.Id == id); SaveAndNotify(); }
+    public void ClearMissed() { State.MissedAlerts.Clear(); SaveAndNotify(); }
     public void SetAlarm(int hour, int minute, bool use24Hour, string? label = null, AlarmRepeat repeat = AlarmRepeat.Once,
-        int weekdayMask = 0, int intervalDays = 1, DateTime? endDate = null)
+        int weekdayMask = 0, int intervalDays = 1, DateTime? endDate = null, Guid? editId = null)
     {
-        StopSound();
-        var h = Math.Clamp(hour, 0, 23);
-        var m = Math.Clamp(minute, 0, 59);
-        var now = DateTimeOffset.Now;
-        var firstDaily = RecurrenceCalculator.Next(now, h, m, AlarmRepeat.Daily) ?? now.AddDays(1);
-        int? anchor = repeat == AlarmRepeat.Weekly ? (int)firstDaily.DayOfWeek : null;
-        var anchorDate = repeat == AlarmRepeat.EveryNDays ? (DateTime?)firstDaily.Date : null;
-        var target = RecurrenceCalculator.Next(now, h, m, repeat, anchor, anchorDate, weekdayMask, intervalDays, endDate);
-        if (target is null) return;
-        State.Alarm = new AlarmState
-        {
-            Phase = AlarmPhase.Scheduled,
-            Hour = h,
-            Minute = m,
-            Use24Hour = use24Hour,
-            Label = label?.Trim() ?? string.Empty,
-            Repeat = repeat,
-            RepeatAnchorDayOfWeek = anchor,
-            RepeatAnchorDate = anchorDate,
-            RepeatWeekdayMask = Math.Clamp(weekdayMask, 0, 127),
-            RepeatIntervalDays = Math.Clamp(intervalDays, 1, 365),
-            RepeatEndDate = endDate?.Date,
-            TargetAt = target
-        };
-        SaveAndNotify();
+        var now = _engine.Now;
+        var h = Math.Clamp(hour, 0, 23); var m = Math.Clamp(minute, 0, 59);
+        var first = RecurrenceCalculator.Next(now, h, m, AlarmRepeat.Daily, timeZone: TimeZoneInfo.Local) ?? now.AddDays(1);
+        int? anchor = repeat == AlarmRepeat.Weekly ? (int)first.DayOfWeek : null;
+        DateTime? anchorDate = repeat == AlarmRepeat.EveryNDays ? first.Date : null;
+        var target = RecurrenceCalculator.Next(now, h, m, repeat, anchor, anchorDate, weekdayMask, intervalDays, endDate, TimeZoneInfo.Local);
+        if (target is null) throw new ArgumentException("Choose repeat days and an end date that allow a future alarm.");
+        var alarm = new AlarmState { Id = editId ?? Guid.NewGuid(), Phase = AlarmPhase.Scheduled, Hour = h, Minute = m,
+            Use24Hour = use24Hour, Label = label?.Trim() ?? "", Repeat = repeat, RepeatAnchorDayOfWeek = anchor,
+            RepeatAnchorDate = anchorDate, RepeatWeekdayMask = weekdayMask, RepeatIntervalDays = Math.Clamp(intervalDays, 1, 365),
+            RepeatEndDate = endDate?.Date, TargetAt = target };
+        if (editId is not null) State.Alarms.RemoveAll(a => a.Id == editId);
+        State.Alarms.Add(alarm); State.SelectedAlarmId = alarm.Id; SaveAndNotify();
     }
-
-    // Advances a repeating alarm to its next occurrence; returns false for a one-shot alarm.
-    private bool RescheduleIfRepeating(AlarmState alarm, DateTimeOffset after)
-    {
-        if (alarm.Repeat == AlarmRepeat.Once) return false;
-        alarm.Phase = AlarmPhase.Scheduled;
-        alarm.RingStartedAt = null;
-        alarm.SnoozeUntil = null;
-        alarm.SnoozeCount = 0;
-        alarm.TargetAt = RecurrenceCalculator.Next(after, alarm.Hour, alarm.Minute, alarm.Repeat,
-            alarm.RepeatAnchorDayOfWeek, alarm.RepeatAnchorDate, alarm.RepeatWeekdayMask,
-            alarm.RepeatIntervalDays, alarm.RepeatEndDate);
-        if (alarm.TargetAt is null)
-        {
-            alarm.Phase = AlarmPhase.Dismissed;
-            return false;
-        }
-        return true;
-    }
-
-    public void DeleteAlarm()
-    {
-        StopSound();
-        State.Alarm = new AlarmState();
-        SaveAndNotify();
-    }
-
-    public void DismissAlarm()
-    {
-        StopSound();
-        if (!RescheduleIfRepeating(State.Alarm, DateTimeOffset.Now))
-            State.Alarm.Phase = AlarmPhase.Dismissed;
-        SaveAndNotify();
-    }
-
-    public void SnoozeAlarm(int minutes)
-    {
-        if (State.Alarm.Phase is not (AlarmPhase.Ringing or AlarmPhase.Scheduled or AlarmPhase.Snoozed)) return;
-        StopSound();
-        State.Alarm.Phase = AlarmPhase.Snoozed;
-        State.Alarm.SnoozeUntil = DateTimeOffset.Now.AddMinutes(Math.Max(1, minutes));
-        State.Alarm.SnoozeCount++;
-        SaveAndNotify();
-    }
-
+    public void DeleteAlarm() => DeleteAlarm(State.Alarm.Id);
+    public void DeleteAlarm(Guid id) { State.Alarms.RemoveAll(a => a.Id == id); SaveAndNotify(); }
+    public void DismissAlarm() => DismissAlarm(State.Alarm.Id);
+    public void DismissAlarm(Guid id)
+    { if (State.Alarms.FirstOrDefault(a => a.Id == id) is { Phase: AlarmPhase.Ringing or AlarmPhase.Snoozed } alarm) TimerEngine.AdvanceAlarm(alarm, _engine.Now, TimeZoneInfo.Local); SaveAndNotify(); }
+    public void SnoozeAlarm(int minutes) => SnoozeAlarm(State.Alarm.Id, minutes);
+    public void SnoozeAlarm(Guid id, int minutes) { _engine.Snooze(id, minutes); SaveAndNotify(); }
     private void Tick()
     {
         var now = DateTimeOffset.Now;
-        var dirty = false;
-        var timer = State.Timer;
-        if (timer.Phase == TimerPhase.Running && TimerRemaining <= TimeSpan.Zero)
-        {
-            timer.Phase = TimerPhase.Completed;
-            timer.CompletedAt = now;
-            timer.CompletionAcknowledged = false;
-            StartTimerSound();
-            RaiseEvent("timer_completed", "Timer done",
-                string.IsNullOrWhiteSpace(timer.Label) ? "Your timer finished." : timer.Label);
-            dirty = true;
-        }
-        else if (timer.Phase == TimerPhase.Completed && !timer.CompletionAcknowledged &&
-                 timer.CompletedAt is not null && now - timer.CompletedAt >= TimerDoneVisibility)
-        {
-            timer.CompletionAcknowledged = true;
-            StopSound();
-            dirty = true;
-        }
-
-        var alarm = State.Alarm;
-        var target = alarm.Phase == AlarmPhase.Snoozed ? alarm.SnoozeUntil : alarm.TargetAt;
-        if (alarm.Phase is AlarmPhase.Scheduled or AlarmPhase.Snoozed && target is not null && now >= target)
-        {
-            alarm.Phase = AlarmPhase.Ringing;
-            alarm.RingStartedAt = now;
-            StartAlarmSound();
-            RaiseEvent("alarm_ringing", "Alarm",
-                string.IsNullOrWhiteSpace(alarm.Label) ? FormatAlarmTime(alarm) : alarm.Label);
-            dirty = true;
-        }
-        else if (alarm.Phase == AlarmPhase.Ringing && alarm.RingStartedAt is not null &&
-                 now - alarm.RingStartedAt >= AlarmTimeout)
-        {
-            StopSound();
-            if (!RescheduleIfRepeating(alarm, now)) alarm.Phase = AlarmPhase.Dismissed;
-            dirty = true;
-        }
-
-        if (dirty) Save();
+        var result = _engine.Tick(now - _lastTick > TimeSpan.FromSeconds(45));
+        _lastTick = now;
+        if (result.Completed.Count > 0 && !State.Alarms.Any(a => a.Phase == AlarmPhase.Ringing) && !AppDataPaths.IsPreview) SystemSounds.Asterisk.Play();
+        if (result.Completed.Count > 0) EventRaised?.Invoke(this, new("timer_completed", "Timer done", string.Join(", ", State.Timers.Where(t => result.Completed.Contains(t.Id)).Select(TimerEngine.TimerLabel))));
+        if (result.Ringing.Count > 0) EventRaised?.Invoke(this, new("alarm_ringing", "Alarm", string.Join(", ", State.Alarms.Where(a => result.Ringing.Contains(a.Id)).Select(a => string.IsNullOrWhiteSpace(a.Label) ? FormatAlarmTime(a) : a.Label))));
+        SyncSound();
+        if (result.Changed) Save();
         UpdateTickInterval();
-
-        // Only ask the UI to refresh while there is time-sensitive state. Previously this
-        // raised bindings continuously even when no timer or alarm was active.
-        if (timer.Phase == TimerPhase.Running ||
-            alarm.Phase is AlarmPhase.Scheduled or AlarmPhase.Snoozed or AlarmPhase.Ringing ||
-            dirty)
-            Changed?.Invoke(this, EventArgs.Empty);
+        if (result.Changed || State.Timers.Any(t => t.Phase == TimerPhase.Running) || State.Alarms.Any(a => a.Phase is AlarmPhase.Scheduled or AlarmPhase.Snoozed or AlarmPhase.Ringing)) Changed?.Invoke(this, EventArgs.Empty);
     }
-
-    private void StartTimerSound()
+    private void SyncSound()
     {
-        StopSound();
-        SystemSounds.Asterisk.Play();
+        var ringing = State.Alarms.Any(a => a.Phase == AlarmPhase.Ringing) && !AppDataPaths.IsPreview;
+        if (ringing && _soundTimer is null) _soundTimer = new(_ => { try { SystemSounds.Exclamation.Play(); } catch { } }, null, TimeSpan.Zero, TimeSpan.FromSeconds(1.4));
+        if (!ringing) { _soundTimer?.Dispose(); _soundTimer = null; }
     }
-
-    private void StartAlarmSound()
-    {
-        StopSound();
-        _soundTimer = new System.Threading.Timer(_ =>
-        {
-            try { SystemSounds.Exclamation.Play(); } catch { }
-        }, null, TimeSpan.Zero, TimeSpan.FromSeconds(1.4));
-    }
-
-    private void StopSound()
-    {
-        _soundTimer?.Dispose();
-        _soundTimer = null;
-    }
-
-    private void Load()
-    {
-        if (!File.Exists(_statePath)) return;
-        try
-        {
-            State = JsonSerializer.Deserialize<TimerAlarmSnapshot>(File.ReadAllText(_statePath), JsonOptions)
-                ?? new TimerAlarmSnapshot();
-            RecoverAfterRestart();
-            Save();
-        }
-        catch (Exception ex)
-        {
-            try { File.Move(_statePath, _statePath + $".corrupt-{DateTime.Now:yyyyMMdd-HHmmss}", true); }
-            catch { }
-            State = new TimerAlarmSnapshot();
-            _log.Error("Timer/alarm state was invalid and has been reset", ex);
-        }
-    }
-
-    private void RecoverAfterRestart()
-    {
-        var now = DateTimeOffset.Now;
-        if (State.Timer.Phase == TimerPhase.Running && TimerRemaining <= TimeSpan.Zero)
-        {
-            State.Timer.Phase = TimerPhase.Completed;
-            State.Timer.CompletedAt = now;
-            State.Timer.CompletionAcknowledged = true;
-        }
-        if (State.Alarm.Phase == AlarmPhase.Ringing)
-        {
-            if (!RescheduleIfRepeating(State.Alarm, now)) State.Alarm.Phase = AlarmPhase.Dismissed;
-        }
-        // A scheduled alarm whose time passed while the app was closed: reschedule if repeating, else drop.
-        if (State.Alarm.Phase == AlarmPhase.Scheduled && State.Alarm.TargetAt is not null &&
-            now - State.Alarm.TargetAt > AlarmTimeout)
-        {
-            if (!RescheduleIfRepeating(State.Alarm, now)) State.Alarm.Phase = AlarmPhase.Dismissed;
-        }
-    }
-
-    private void SaveAndNotify()
-    {
-        Save();
-        UpdateTickInterval();
-        Changed?.Invoke(this, EventArgs.Empty);
-    }
-
     private void UpdateTickInterval()
     {
-        var timerNeedsUpdates = State.Timer.Phase == TimerPhase.Running ||
-            State.Timer.Phase == TimerPhase.Completed && !State.Timer.CompletionAcknowledged;
-        var alarm = State.Alarm;
-
-        var interval = timerNeedsUpdates || alarm.Phase == AlarmPhase.Ringing
-            ? ActiveTickInterval
-            : IdleTickInterval;
-
-        if (!timerNeedsUpdates && alarm.Phase is AlarmPhase.Scheduled or AlarmPhase.Snoozed)
-        {
-            var target = alarm.Phase == AlarmPhase.Snoozed ? alarm.SnoozeUntil : alarm.TargetAt;
-            if (target is not null)
-            {
-                var untilDue = target.Value - DateTimeOffset.Now;
-                interval = TimeSpan.FromMilliseconds(Math.Clamp(
-                    untilDue.TotalMilliseconds, ActiveTickInterval.TotalMilliseconds, IdleTickInterval.TotalMilliseconds));
-            }
-        }
-
-        if (_tickTimer.Interval != interval) _tickTimer.Interval = interval;
+        var active = State.Timers.Any(t => t.Phase == TimerPhase.Running || (t.Phase == TimerPhase.Completed && !t.CompletionAcknowledged)) || State.Alarms.Any(a => a.Phase == AlarmPhase.Ringing);
+        var next = State.Alarms.Where(a => a.Phase is AlarmPhase.Scheduled or AlarmPhase.Snoozed).Select(a => (a.Phase == AlarmPhase.Snoozed ? a.SnoozeUntil : a.TargetAt) ?? DateTimeOffset.MaxValue).DefaultIfEmpty(DateTimeOffset.MaxValue).Min();
+        _tickTimer.Interval = TimeSpan.FromMilliseconds(active ? 500 : Math.Clamp((next - _engine.Now).TotalMilliseconds, 500, 30000));
     }
-
+    private void SaveAndNotify() { SyncSound(); Save(); UpdateTickInterval(); Changed?.Invoke(this, EventArgs.Empty); }
     private void Save()
     {
-        try
-        {
-            var temporary = _statePath + ".tmp";
-            File.WriteAllText(temporary, JsonSerializer.Serialize(State, JsonOptions));
-            File.Move(temporary, _statePath, true);
-        }
-        catch (Exception ex) { _log.Error("Unable to save timer/alarm state", ex); }
+        if (_readOnly) return;
+        _engine.PrepareForSave();
+        try { File.WriteAllText(_statePath + ".tmp", JsonSerializer.Serialize(State, new JsonSerializerOptions { WriteIndented = true })); File.Move(_statePath + ".tmp", _statePath, true); }
+        catch (Exception ex) { StorageWarning = "Timer changes could not be saved."; _log.Error(StorageWarning, ex); }
     }
-
-    private void RaiseEvent(string name, string title, string message) =>
-        EventRaised?.Invoke(this, new TimerAlarmEventArgs(name, title, message));
-
     public static string FormatDuration(TimeSpan value) => value.TotalHours >= 1
         ? $"{(int)value.TotalHours}:{value.Minutes:00}:{value.Seconds:00}"
         : $"{value.Minutes:00}:{value.Seconds:00}";
@@ -396,8 +188,8 @@ public sealed class TimerAlarmService : IDisposable
 
     public void Dispose()
     {
-        _tickTimer.Stop();
-        StopSound();
-        Save();
+        Microsoft.Win32.SystemEvents.PowerModeChanged -= PowerChanged;
+        Microsoft.Win32.SystemEvents.TimeChanged -= TimeChanged;
+        _tickTimer.Stop(); _soundTimer?.Dispose(); Save();
     }
 }

@@ -6,6 +6,7 @@ public enum AlarmRepeat { Once, Daily, Weekdays, Weekends, Weekly, SelectedWeekd
 
 public sealed class TimerState
 {
+    public Guid Id { get; set; } = Guid.NewGuid();
     public TimerPhase Phase { get; set; }
     public string Label { get; set; } = string.Empty;
     public double TotalSeconds { get; set; }
@@ -18,6 +19,7 @@ public sealed class TimerState
 
 public sealed class AlarmState
 {
+    public Guid Id { get; set; } = Guid.NewGuid();
     public AlarmPhase Phase { get; set; }
     public int Hour { get; set; } = 7;
     public int Minute { get; set; }
@@ -38,6 +40,17 @@ public sealed class AlarmState
 
 public sealed class TimerAlarmSnapshot
 {
-    public TimerState Timer { get; set; } = new();
-    public AlarmState Alarm { get; set; } = new();
+    public int Version { get; set; } = 2;
+    public List<TimerState> Timers { get; set; } = [];
+    public List<AlarmState> Alarms { get; set; } = [];
+    public List<TimerPreset> Presets { get; set; } = [];
+    public List<string> MissedAlerts { get; set; } = [];
+    public Guid? SelectedTimerId { get; set; }
+    public Guid? SelectedAlarmId { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public TimerState Timer => Timers.FirstOrDefault(t => t.Id == SelectedTimerId) ?? Timers.FirstOrDefault() ?? new();
+    [System.Text.Json.Serialization.JsonIgnore]
+    public AlarmState Alarm => Alarms.FirstOrDefault(a => a.Id == SelectedAlarmId) ?? Alarms.FirstOrDefault() ?? new();
 }
+
+public sealed record TimerPreset(Guid Id, string Label, double Seconds);

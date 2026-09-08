@@ -19,12 +19,13 @@ public static class RecurrenceCalculator
         DateTime? anchorDate = null,
         int weekdayMask = 0,
         int intervalDays = 1,
-        DateTime? endDate = null)
+        DateTime? endDate = null,
+        TimeZoneInfo? timeZone = null)
     {
         if (repeat == AlarmRepeat.Once)
         {
-            var once = Candidate(after, hour, minute, 0);
-            if (once <= after) once = once.AddDays(1);
+            var once = LocalCandidate(after.Date, hour, minute, after.Offset, timeZone);
+            if (once <= after) once = LocalCandidate(after.Date.AddDays(1), hour, minute, after.Offset, timeZone);
             return IsBeforeEnd(once, endDate) ? once : null;
         }
 
@@ -46,7 +47,7 @@ public static class RecurrenceCalculator
                 _ => false
             };
             if (!matches) continue;
-            var value = new DateTimeOffset(date.Year, date.Month, date.Day, hour, minute, 0, after.Offset);
+            var value = LocalCandidate(date, hour, minute, after.Offset, timeZone);
             if (value > after && IsBeforeEnd(value, endDate)) return value;
         }
         return null;
@@ -57,4 +58,14 @@ public static class RecurrenceCalculator
 
     private static bool IsBeforeEnd(DateTimeOffset value, DateTime? endDate) =>
         endDate is null || value.Date <= endDate.Value.Date;
+
+    private static DateTimeOffset LocalCandidate(DateTime date, int hour, int minute, TimeSpan fallbackOffset, TimeZoneInfo? zone)
+    {
+        var local = DateTime.SpecifyKind(date.Date.AddHours(Math.Clamp(hour, 0, 23)).AddMinutes(Math.Clamp(minute, 0, 59)), DateTimeKind.Unspecified);
+        if (zone is null) return new(local, fallbackOffset);
+        // Spring gap: first valid minute. Fall overlap: first occurrence, never ring twice.
+        while (zone.IsInvalidTime(local)) local = local.AddMinutes(1);
+        var offset = zone.IsAmbiguousTime(local) ? zone.GetAmbiguousTimeOffsets(local).Max() : zone.GetUtcOffset(local);
+        return new(local, offset);
+    }
 }

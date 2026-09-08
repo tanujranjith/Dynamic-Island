@@ -6,7 +6,7 @@ using DynamicIsland.Windows.Services;
 
 namespace DynamicIsland.Windows.ViewModels;
 
-public sealed class TimerAlarmViewModel : ObservableObject, IDisposable
+public sealed partial class TimerAlarmViewModel : ObservableObject, IDisposable
 {
     private readonly TimerAlarmService _service;
     private string _customMinutes = "10";
@@ -25,16 +25,18 @@ public sealed class TimerAlarmViewModel : ObservableObject, IDisposable
     {
         _service = service;
         _use24Hour = use24Hour;
+        InitializeCollections();
         StartPresetCommand = new RelayCommand<string>(value =>
         {
             if (int.TryParse(value, out var minutes)) _service.StartTimer(TimeSpan.FromMinutes(minutes), TimerLabel);
         });
         StartCustomCommand = new RelayCommand(() =>
         {
-            if (double.TryParse(CustomMinutes, out var minutes) && minutes > 0)
-                _service.StartTimer(TimeSpan.FromMinutes(Math.Min(minutes, 24 * 60)), TimerLabel);
-        });
-        TimerPrimaryCommand = new RelayCommand(() =>
+            if (!double.TryParse(CustomMinutes, out var minutes) || !double.IsFinite(minutes) || minutes < 1d / 60 || minutes > 1440)
+            { ValidationMessage = "Enter a duration from 1 second to 1440 minutes."; return; }
+            ValidationMessage = "";
+            _service.StartTimer(TimeSpan.FromMinutes(minutes), TimerLabel);
+        });        TimerPrimaryCommand = new RelayCommand(() =>
         {
             if (_service.State.Timer.Phase == TimerPhase.Running) _service.PauseTimer();
             else if (_service.State.Timer.Phase == TimerPhase.Paused) _service.ResumeTimer();
@@ -156,7 +158,8 @@ public sealed class TimerAlarmViewModel : ObservableObject, IDisposable
 
     private void SetAlarm()
     {
-        if (!int.TryParse(AlarmHour, out var hour) || !int.TryParse(AlarmMinute, out var minute)) return;
+        if (!int.TryParse(AlarmHour, out var hour) || !int.TryParse(AlarmMinute, out var minute) || minute is < 0 or > 59 || (Use24Hour ? hour is < 0 or > 23 : hour is < 1 or > 12))
+        { ValidationMessage = "Enter a valid hour and minute."; return; }
         if (!Use24Hour)
         {
             hour = Math.Clamp(hour, 1, 12) % 12;
@@ -165,11 +168,17 @@ public sealed class TimerAlarmViewModel : ObservableObject, IDisposable
         var mask = (Sunday ? 1 : 0) | (Monday ? 2 : 0) | (Tuesday ? 4 : 0) | (Wednesday ? 8 : 0)
             | (Thursday ? 16 : 0) | (Friday ? 32 : 0) | (Saturday ? 64 : 0);
         var interval = int.TryParse(IntervalDays, out var parsed) ? Math.Clamp(parsed, 1, 365) : 1;
-        _service.SetAlarm(hour, Math.Clamp(minute, 0, 59), Use24Hour, AlarmLabel, AlarmRepeat, mask, interval, RepeatEndDate);
+        try
+        {
+            _service.SetAlarm(hour, Math.Clamp(minute, 0, 59), Use24Hour, AlarmLabel, AlarmRepeat, mask, interval, RepeatEndDate, _editingAlarm);
+            _editingAlarm = null; ValidationMessage = "Alarm saved"; RaisePropertyChanged(nameof(SaveAlarmText));
+        }
+        catch (ArgumentException ex) { ValidationMessage = ex.Message; }
     }
 
     private void OnChanged(object? sender, EventArgs e)
     {
+        RefreshCollections();
         RaisePropertyChanged(nameof(TimerRemaining));
         RaisePropertyChanged(nameof(TimerProgress));
         RaisePropertyChanged(nameof(TimerStateText));
