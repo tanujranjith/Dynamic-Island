@@ -11,10 +11,8 @@ public sealed class SettingsService(LoggingService log)
         PropertyNameCaseInsensitive = true
     };
 
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly string _directory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "DynamicIsland.Windows");
+    private static readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly string _directory = DynamicIsland.Windows.Infrastructure.AppDataPaths.Root;
 
     public string SettingsPath => Path.Combine(_directory, "settings.json");
 
@@ -78,7 +76,8 @@ public sealed class SettingsService(LoggingService log)
             settings.ShowIslandInScreenshots = false;
         if (previousSchema < 10)
             settings.QAutoExpandIsland = true;
-        settings.SchemaVersion = Math.Max(10, settings.SchemaVersion);
+        settings.SchemaVersion = Math.Max(11, settings.SchemaVersion);
+        if (settings.PinnedActivity is not (IslandActivity.None or IslandActivity.Media or IslandActivity.Timer)) settings.PinnedActivity = IslandActivity.None;
         settings.SelectedMediaApp = string.IsNullOrWhiteSpace(settings.SelectedMediaApp)
             ? "Automatic" : settings.SelectedMediaApp;
         settings.CollapseDelayMilliseconds = Math.Clamp(settings.CollapseDelayMilliseconds, 100, 5000);

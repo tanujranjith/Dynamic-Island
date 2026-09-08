@@ -12,7 +12,7 @@ public interface IQSecretStore
 
 public sealed class DpapiSecretStore(LoggingService log) : IQSecretStore
 {
-    private readonly string _path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DynamicIsland.Windows", "q-secrets.dat");
+    private readonly string _path = Path.Combine(DynamicIsland.Windows.Infrastructure.AppDataPaths.Root, "q-secrets.dat");
     private readonly object _gate = new();
 
     public string? Get(string providerId) => Read().TryGetValue(providerId, out var value) ? value : null;

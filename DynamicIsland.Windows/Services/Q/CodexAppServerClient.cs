@@ -38,6 +38,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
+        if (Infrastructure.AppDataPaths.IsPreview) throw new InvalidOperationException("Codex is disabled in the isolated preview.");
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_initialized && IsRunning) return;
         await _startGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -162,7 +163,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         await StartAsync(cancellationToken).ConfigureAwait(false);
-        var workspace = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DynamicIsland.Windows", "CodexWorkspace");
+        var workspace = Path.Combine(DynamicIsland.Windows.Infrastructure.AppDataPaths.Root, "CodexWorkspace");
         Directory.CreateDirectory(workspace);
         var thread = await SendRequestAsync("thread/start",
             CodexTurnStartRequest.CreateThread(model, workspace), cancellationToken).ConfigureAwait(false);

@@ -10,9 +10,7 @@ public sealed class LoggingService
 
     public LoggingService()
     {
-        var directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DynamicIsland.Windows", "logs");
+        var directory = Path.Combine(DynamicIsland.Windows.Infrastructure.AppDataPaths.Root, "logs");
         Directory.CreateDirectory(directory);
         _logPath = Path.Combine(directory, "dynamic-island.log");
     }

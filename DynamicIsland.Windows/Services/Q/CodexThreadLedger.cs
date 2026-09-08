@@ -10,8 +10,7 @@ public sealed class CodexThreadLedger
 
     public CodexThreadLedger(string? path = null)
     {
-        _path = path ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DynamicIsland.Windows", "codex-thread-ledger.json");
+        _path = path ?? Path.Combine(DynamicIsland.Windows.Infrastructure.AppDataPaths.Root, "codex-thread-ledger.json");
     }
 
     public IReadOnlyList<string> Snapshot()

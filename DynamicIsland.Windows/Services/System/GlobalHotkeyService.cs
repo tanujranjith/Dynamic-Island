@@ -21,7 +21,7 @@ public sealed class GlobalHotkeyService(LoggingService log) : IDisposable
 
     public bool Register(string name, uint modifiers, uint key, Action action)
     {
-        if (_source is null) return false;
+        if (_source is null || Infrastructure.AppDataPaths.IsPreview) return false;
         var id = _nextId++;
         if (!NativeMethods.RegisterHotKey(_source.Handle, id, modifiers, key))
         {

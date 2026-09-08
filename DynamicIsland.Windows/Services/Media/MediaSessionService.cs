@@ -54,9 +54,7 @@ public sealed class MediaSessionService(LoggingService log) : IDisposable
         byte[]? art = null;
         try
         {
-            var path = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "DynamicIsland.Windows", "demo-cover.png");
+            var path = Path.Combine(DynamicIsland.Windows.Infrastructure.AppDataPaths.Root, "demo-cover.png");
             if (File.Exists(path)) art = await File.ReadAllBytesAsync(path, token);
         }
         catch { }

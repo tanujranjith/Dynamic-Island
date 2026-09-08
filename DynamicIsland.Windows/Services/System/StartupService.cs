@@ -9,6 +9,7 @@ public sealed class StartupService(LoggingService log)
 
     public bool IsEnabled()
     {
+        if (Infrastructure.AppDataPaths.IsPreview) return false;
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKey, false);
@@ -23,6 +24,7 @@ public sealed class StartupService(LoggingService log)
 
     public bool SetEnabled(bool enabled)
     {
+        if (Infrastructure.AppDataPaths.IsPreview) return false;
         try
         {
             using var key = Registry.CurrentUser.CreateSubKey(RunKey, true);

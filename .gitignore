@@ -28,3 +28,4 @@ Thumbs.db
 
 # Local UI/QA captures may contain private desktop content; keep them out of Git.
 test-artifacts/
+artifacts/
