@@ -670,12 +670,14 @@
                         </StackPanel>
 
                         <!-- Expanded privacy state behaves like a compact Live Activity region rather
-                             than a floating indicator or notification card. -->
-                        <Border x:Name="ExpandedPrivacyActivity" Grid.Row="1" Height="26" MinWidth="168"
-                                Padding="10,0" Margin="0,3,0,1" HorizontalAlignment="Right"
+                             than a floating indicator or notification card. Row 2 names the app(s)
+                             holding the sensor so users can see *where* it is being used. -->
+                        <Border x:Name="ExpandedPrivacyActivity" Grid.Row="1" Height="Auto" MinHeight="26" MinWidth="168" MaxWidth="340"
+                                Padding="10,5" Margin="0,3,0,1" HorizontalAlignment="Right"
                                 CornerRadius="13" Background="#FF111411" BorderBrush="#24FFFFFF" BorderThickness="1"
                                 RenderTransformOrigin="1,0.5" IsHitTestVisible="False"
-                                AutomationProperties.Name="{Binding PrivacyActivityText}">
+                                ToolTip="{Binding PrivacyDetailText}"
+                                AutomationProperties.Name="{Binding PrivacyDetailText}">
                             <Border.Style>
                                 <Style TargetType="Border">
                                     <Setter Property="Visibility" Value="Collapsed" />
@@ -702,6 +704,10 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
                                 <Ellipse Width="7" Height="7" Margin="0,0,7,0"
                                          Fill="{Binding PrivacyIndicatorBrush}" VerticalAlignment="Center" />
                                 <TextBlock Grid.Column="1" Text="{Binding PrivacyActivityText}"
@@ -711,6 +717,11 @@
                                 <TextBlock Grid.Column="2" Text="LIVE" Margin="10,0,0,0"
                                            FontFamily="Segoe UI Variable Text" FontSize="8" FontWeight="Bold"
                                            Foreground="{Binding PrivacyIndicatorBrush}" VerticalAlignment="Center" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding PrivacySourceText}"
+                                           Margin="0,1,0,0" MaxWidth="280" TextTrimming="CharacterEllipsis"
+                                           FontFamily="Segoe UI Variable Text" FontSize="10" FontWeight="Normal"
+                                           Foreground="{StaticResource AppleSecondary}" VerticalAlignment="Center"
+                                           Visibility="{Binding HasPrivacySource, Converter={StaticResource BoolToVisibility}}" />
                             </Grid>
                         </Border>
                     </Grid>
@@ -844,28 +855,32 @@
                                 Width="{Binding LiveWidgetRailWidth}" Height="64"
                                 Margin="8,8,0,0" CornerRadius="16" Background="Transparent"
                                 Visibility="{Binding ShowWidgetsPanel, Converter={StaticResource BoolToVisibility}}">
+                            <Grid>
                             <ScrollViewer x:Name="LiveWidgetsScroller"
                                           HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
                                           PanningMode="HorizontalOnly" CanContentScroll="True"
-                                          PreviewMouseWheel="LiveWidgetsScroller_PreviewMouseWheel">
+                                          PreviewMouseWheel="LiveWidgetsScroller_PreviewMouseWheel"
+                                          ScrollChanged="LiveWidgetsScroller_ScrollChanged">
                                 <StackPanel Orientation="Horizontal">
-                            <Border Width="{Binding SmallLiveWidgetWidth}" Height="64" Margin="0,0,8,0" Padding="10,7" CornerRadius="16"
+                            <Border Width="{Binding SmallLiveWidgetWidth}" Height="64" Margin="0,0,8,0" Padding="10,5" CornerRadius="16"
                                     Background="#FF1A2028" Visibility="{Binding ShowConnectivity, Converter={StaticResource BoolToVisibility}}">
-                                <Button Command="{Binding OpenWifiSettingsCommand}" Background="Transparent" BorderThickness="0" Padding="0">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="&#xE701;" FontFamily="Segoe Fluent Icons" FontSize="21" Foreground="{Binding WifiStatusBrush}" />
-                                        <StackPanel Margin="8,0,0,0"><TextBlock Text="WI-FI" FontSize="8" Foreground="#FF8F9BA8" /><TextBlock Text="{Binding WifiStatusText}" FontSize="11" Foreground="{StaticResource AppleWhite}" /></StackPanel>
-                                    </StackPanel>
-                                </Button>
-                            </Border>
-                            <Border Width="{Binding SmallLiveWidgetWidth}" Height="64" Margin="0,0,8,0" Padding="10,7" CornerRadius="16"
-                                    Background="#FF1A2028" Visibility="{Binding ShowConnectivity, Converter={StaticResource BoolToVisibility}}">
-                                <Button Command="{Binding OpenBluetoothSettingsCommand}" Background="Transparent" BorderThickness="0" Padding="0">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="&#xE702;" FontFamily="Segoe Fluent Icons" FontSize="21" Foreground="{Binding BluetoothStatusBrush}" />
-                                        <StackPanel Margin="8,0,0,0"><TextBlock Text="BLUETOOTH" FontSize="8" Foreground="#FF8F9BA8" /><TextBlock Text="{Binding BluetoothStatusText}" FontSize="11" Foreground="{StaticResource AppleWhite}" /></StackPanel>
-                                    </StackPanel>
-                                </Button>
+                                <Grid>
+                                    <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                                    <Button Command="{Binding OpenWifiSettingsCommand}" Background="Transparent" BorderThickness="0" Padding="0"
+                                            ToolTip="Open Wi-Fi settings" AutomationProperties.Name="Open Wi-Fi settings">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="&#xE701;" FontFamily="Segoe Fluent Icons" FontSize="15" Foreground="{Binding WifiStatusBrush}" VerticalAlignment="Center" />
+                                            <StackPanel Margin="8,0,0,0" VerticalAlignment="Center"><TextBlock Text="WI-FI" FontSize="8" Foreground="#FF8F9BA8" /><TextBlock Text="{Binding WifiStatusText}" FontSize="10.5" Foreground="{StaticResource AppleWhite}" /></StackPanel>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Grid.Row="1" Command="{Binding OpenBluetoothSettingsCommand}" Background="Transparent" BorderThickness="0" Padding="0"
+                                            ToolTip="Open Bluetooth settings" AutomationProperties.Name="Open Bluetooth settings">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="&#xE702;" FontFamily="Segoe Fluent Icons" FontSize="15" Foreground="{Binding BluetoothStatusBrush}" VerticalAlignment="Center" />
+                                            <StackPanel Margin="8,0,0,0" VerticalAlignment="Center"><TextBlock Text="BLUETOOTH" FontSize="8" Foreground="#FF8F9BA8" /><TextBlock Text="{Binding BluetoothStatusText}" FontSize="10.5" Foreground="{StaticResource AppleWhite}" /></StackPanel>
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
                             </Border>
                             <Border Width="{Binding WeatherWidgetWidth}" Height="64" Margin="0,0,8,0" Padding="11,7" CornerRadius="16"
                                     Background="#FF1A2028"
@@ -974,6 +989,24 @@
                             </ItemsControl>
                                 </StackPanel>
                             </ScrollViewer>
+                                <!-- Overflow affordance: edge fade + chevron appear only while content
+                                     is clipped off-screen (toggled in code-behind on ScrollChanged). -->
+                                <Border x:Name="LiveWidgetsFade" Width="30" HorizontalAlignment="Right"
+                                        CornerRadius="0,16,16,0" IsHitTestVisible="False" Visibility="Collapsed">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                            <GradientStop Offset="0" Color="#001A2028" />
+                                            <GradientStop Offset="1" Color="#FF1A2028" />
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                </Border>
+                                <Button x:Name="LiveWidgetsMoreButton" Content="&#xE76C;"
+                                        Style="{StaticResource AppleControlOnDark}" Width="22" Height="22"
+                                        FontSize="10" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                        Margin="0,0,4,0" Visibility="Collapsed"
+                                        ToolTip="More widgets" AutomationProperties.Name="Scroll widgets right"
+                                        Click="LiveWidgetsMoreButton_Click" />
+                            </Grid>
                         </Border>
 
                         <!-- AirPods remains its own card and fills the space left of live widgets. -->
@@ -1544,7 +1577,8 @@
         <Grid x:Name="PrivacyIndicatorDot" Width="18" Height="18" Margin="0,8,0,0"
               HorizontalAlignment="Center" VerticalAlignment="Top" Panel.ZIndex="21"
               RenderTransformOrigin="0.5,0.5" IsHitTestVisible="False"
-              AutomationProperties.Name="{Binding PrivacyActivityText}">
+              ToolTip="{Binding PrivacyDetailText}"
+              AutomationProperties.Name="{Binding PrivacyDetailText}">
             <Grid.Style>
                 <Style TargetType="Grid">
                     <Setter Property="Visibility" Value="Collapsed" />
