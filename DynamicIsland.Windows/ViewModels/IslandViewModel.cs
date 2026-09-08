@@ -17,7 +17,7 @@ using MediaBrush = System.Windows.Media.Brush;
 
 namespace DynamicIsland.Windows.ViewModels;
 
-public sealed class IslandViewModel : ObservableObject, IDisposable
+public sealed partial class IslandViewModel : ObservableObject, IDisposable
 {
     private static readonly ConcurrentDictionary<string, MediaBrush> BrushCache =
         new(StringComparer.OrdinalIgnoreCase);
@@ -35,6 +35,7 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
     private readonly CalendarService _calendarService;
     private readonly NotificationListenerService _notificationService;
     private readonly NotificationHistoryService _notificationHistoryService;
+    private readonly SettingsService _settingsPersistence;
     private readonly PrivacySensorService _privacyService;
     private readonly AirPodsService? _airPodsService;
     private AirPodsState _airPods = AirPodsState.Unavailable;
@@ -97,9 +98,10 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         NotificationListenerService notificationService, PrivacySensorService privacyService,
         NotificationHistoryService notificationHistoryService,
         IQSessionController qSession, IQScreenContextService qScreen, IQSpeechInputService qSpeech,
-        Services.Q.IQSecretStore qSecrets, CodexAccountCoordinator? codexAccount = null, AirPodsService? airPodsService = null)
+        Services.Q.IQSecretStore qSecrets, CodexAccountCoordinator? codexAccount = null, AirPodsService? airPodsService = null, SettingsService? settingsService = null)
     {
         Settings = settings;
+        _settingsPersistence = settingsService ?? new SettingsService(new LoggingService());
         _mediaService = mediaService;
         _audioService = audioService;
         _batteryService = batteryService;
@@ -155,9 +157,11 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         _spectrumService.BandsChanged += OnSpectrumChanged;
         _stocksService.Changed += OnStocksChanged;
         _calendarService.Changed += OnMeetingChanged;
-        _notificationService.Notified += OnNotified;
+        _notificationService.BatchReceived += OnNotificationBatch;
+        _calendarService.StatusChanged += OnIntegrationStatusChanged;
+        _notificationService.StatusChanged += OnIntegrationStatusChanged;
         _privacyService.Changed += OnPrivacyChanged;
-        _notificationTimer.Tick += (_, _) => { _notificationTimer.Stop(); _notification = null; RaiseMany(nameof(ShowBanner), nameof(IsAirPodsBannerActive), nameof(BannerApp), nameof(BannerTitle), nameof(BannerBody)); };
+        _notificationTimer.Interval = TimeSpan.FromSeconds(1); _notificationTimer.Tick += (_, _) => PumpNotifications(); _notificationTimer.Start();
         _volumeWarningTimer.Tick += (_, _) => { _volumeWarningTimer.Stop(); _volumeWarningActive = false; RaiseMany(nameof(ShowBanner), nameof(IsAirPodsBannerActive), nameof(BannerApp), nameof(BannerTitle), nameof(BannerBody)); };
         _airPodsBannerTimer.Tick += (_, _) => { _airPodsBannerTimer.Stop(); _airPodsBannerActive = false; RaiseMany(nameof(ShowBanner), nameof(IsAirPodsBannerActive), nameof(BannerApp), nameof(BannerTitle), nameof(BannerBody)); };
         _quoteTimer.Tick += (_, _) => OnUi(AdvanceQuote);
@@ -262,7 +266,7 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         _ => "Q · Ready"
     };
     public bool IsQActive => QState != QRunState.Idle;
-    public bool ShowQSurface => IsQActive && PrimaryActivity is not (IslandActivity.Alarm or IslandActivity.Timer);
+    public bool ShowQSurface => IsQActive && !TimerEditorOpen;
     public bool QIsAsk => QCurrentMode == DynamicIsland.Q.Core.QMode.Ask;
     public bool QIsSay => QCurrentMode == DynamicIsland.Q.Core.QMode.Say;
     public bool QIsListening => QState == QRunState.Listening;
@@ -421,7 +425,7 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
     public bool ShowCompactMediaRing => ShowCompactArt && Settings.ShowMediaProgressRing && HasMediaDuration;
     public bool ShowCompactTimerRing => PrimaryActivity == IslandActivity.Timer && Settings.ShowTimerRing;
     public bool ShowCompactRingTrack => ShowCompactMediaRing || ShowCompactTimerRing;
-    public bool ShowTimerOrb => IsCompact && _timerAlarmService.State.Timer.Phase is TimerPhase.Running or TimerPhase.Paused;
+    public bool ShowTimerOrb => IsCompact && !TimerEditorOpen && DisplayTimer is not null;
     public double TimerRemainingProgress => Math.Clamp(100d - TimerProgress, 0d, 100d);
     public double TimerOrbPerimeterUnits => Math.PI * 36d / 3d;
     public bool ShowExpandedMediaRing => Settings.ShowMedia && HasArtwork && Settings.ShowMediaProgressRing && HasMediaDuration;
@@ -708,9 +712,9 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
     public IReadOnlyList<StockTile> Stocks => _stockTiles;
 
     // ===== Next meeting =====
-    public bool ShowNextMeeting => !FocusModeEnabled && Settings.ShowNextMeeting && _meeting is not null;
-    public string MeetingTitle => _meeting?.Title ?? string.Empty;
-    public string MeetingWhen => _meeting?.CountdownText ?? string.Empty;
+    public bool ShowNextMeeting => !FocusModeEnabled && Settings.ShowNextMeeting;
+    public string MeetingTitle => _meeting?.Title ?? CalendarStatusText;
+    public string MeetingWhen => _meeting?.CountdownText ?? (_calendarService.Status.State == IntegrationState.Ready ? "" : "Open Settings to resolve");
     public bool HasMeetingJoin => !string.IsNullOrWhiteSpace(_meeting?.JoinUrl);
 
     // ===== Battery time =====
@@ -725,30 +729,15 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
     // True when any of the grouped live-activity widgets is enabled (so the panel can be shown/hidden cleanly).
     public bool ShowWidgetsPanel => !FocusModeEnabled && (ShowWeather || ShowStocks || ShowCountdown || ShowNextMeeting
         || ShowWorldClocks || ShowBatteryTime || ShowConnectivity);
-    public double LiveWidgetRailWidth
+    public Thickness LiveWidgetRailMargin => new(ShowAirPodsCard ? 8 : 0, 8, 0, 0);
+    public double LiveWidgetRailWidth => WindowSizingPolicy.WidgetViewport(AccessoryLaneWidth, ShowAirPodsCard);
+    private double _accessoryLaneWidth = 688;
+    private double AccessoryLaneWidth => _accessoryLaneWidth;
+    public void SetAccessoryLaneWidth(double width)
     {
-        get
-        {
-            if (!ShowAirPodsCard) return AccessoryLaneWidth;
-
-            var width = 0d;
-            if (ShowWeather) width += 188d;
-            if (ShowCountdown) width += 144d;
-            if (ShowNextMeeting) width += 198d;
-            if (ShowBatteryTime) width += 150d;
-            if (ShowWorldClocks) width += WorldClocks.Count * 140d;
-            if (ShowStocks) width += Stocks.Count * 140d;
-            if (ShowConnectivity) width += 140d;
-            return Math.Min(332d, width);
-        }
-    }
-    private double AccessoryLaneWidth => Settings.IslandSize switch
-    {
-        IslandSize.Compact => 608d,
-        IslandSize.Large => 788d,
-        _ => 688d
-    };
-    private int LiveWidgetCount =>
+        if (!double.IsFinite(width) || width <= 0 || Math.Abs(_accessoryLaneWidth - width) < 1) return;
+        _accessoryLaneWidth = width; RaiseLiveWidgetLayoutProperties();
+    }    private int LiveWidgetCount =>
         (ShowWeather ? 1 : 0) +
         (ShowCountdown ? 1 : 0) +
         (ShowNextMeeting ? 1 : 0) +
@@ -756,12 +745,7 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         (ShowWorldClocks ? WorldClocks.Count : 0) +
         (ShowStocks ? Stocks.Count : 0) +
         (ShowConnectivity ? 1 : 0);
-    private double ExpandedLiveWidgetCardWidth => LiveWidgetCount == 0
-        ? 0d
-        : Math.Max(132d, (AccessoryLaneWidth - (LiveWidgetCount * 8d)) / LiveWidgetCount);
-    private double GetLiveWidgetCardWidth(double compactWidth) =>
-        ShowAirPodsCard ? compactWidth : ExpandedLiveWidgetCardWidth;
-    public double WeatherWidgetWidth => GetLiveWidgetCardWidth(180d);
+    private double GetLiveWidgetCardWidth(double minimum) => ShowAirPodsCard ? minimum : WindowSizingPolicy.WidgetWidth(LiveWidgetRailWidth, LiveWidgetCount, minimum);    public double WeatherWidgetWidth => GetLiveWidgetCardWidth(180d);
     public double CountdownWidgetWidth => GetLiveWidgetCardWidth(136d);
     public double MeetingWidgetWidth => GetLiveWidgetCardWidth(190d);
     public double BatteryTimeWidgetWidth => GetLiveWidgetCardWidth(142d);
@@ -779,7 +763,7 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         catch { return false; }
     }
     private void RaiseLiveWidgetLayoutProperties() => RaiseMany(
-        nameof(LiveWidgetRailWidth), nameof(WeatherWidgetWidth), nameof(CountdownWidgetWidth),
+        nameof(LiveWidgetRailWidth), nameof(LiveWidgetRailMargin), nameof(WeatherWidgetWidth), nameof(CountdownWidgetWidth),
         nameof(MeetingWidgetWidth), nameof(BatteryTimeWidgetWidth), nameof(SmallLiveWidgetWidth));
     // Secondary widgets surfaced under the status panel in the redesigned expanded island (weather and the
     // system monitor get their own cards, so they're excluded here). Collapses the strip when nothing's on.
@@ -793,7 +777,7 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
     public CornerRadius IslandInnerCornerRadius => new(Math.Max(0, ClampedCornerRadius - 1));
 
     // ===== Notification banner (transient) =====
-    public bool ShowNotification => _notification is not null && Settings.ShowNotifications && !FocusModeEnabled;
+    public bool ShowNotification => _notification is not null && Settings.ShowNotifications && !FocusModeEnabled && !DeferOrdinaryBanners;
     public string NotificationApp => _notification?.App ?? string.Empty;
     public string NotificationTitle => _notification?.Title ?? string.Empty;
     public string NotificationBody => _notification?.Body ?? string.Empty;
@@ -806,8 +790,8 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
     // Privacy activity has its own attached indicator/drop-down presentation in IslandWindow.
     public bool IsAirPodsBannerActive => _airPodsBannerActive && !FocusModeEnabled && !ShowNotification
         && !(_volumeWarningActive && Settings.VolumeWarningEnabled);
-    public bool ShowBanner => ShowNotification || (_volumeWarningActive && Settings.VolumeWarningEnabled && !FocusModeEnabled)
-        || IsAirPodsBannerActive;
+    public bool ShowBanner => !DeferOrdinaryBanners && (ShowNotification || (_volumeWarningActive && Settings.VolumeWarningEnabled && !FocusModeEnabled)
+        || IsAirPodsBannerActive);
     public string BannerApp
     {
         get
@@ -991,14 +975,14 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
     public string BatteryText => !Battery.IsAvailable ? string.Empty : $"{Battery.Percentage}%";
     public string ChargingText => Battery.IsPluggedIn ? $"{Battery.Percentage}%" : string.Empty;
     public string BatteryGlyph => Battery.IsCharging ? "\uE83E" : "\uE850";
-    public string TimerText => TimerAlarmService.FormatDuration(_timerAlarmService.TimerRemaining);
-    public double TimerProgress => _timerAlarmService.TimerProgress * 100;
-    public string AlarmText => _timerAlarmService.State.Alarm.Phase switch
+    public string TimerText => TimerAlarmService.FormatDuration(_timerAlarmService.Remaining(PrimaryTimer));
+    public double TimerProgress => (PrimaryTimer.TotalSeconds <= 0 ? 0 : Math.Clamp(1 - _timerAlarmService.Remaining(PrimaryTimer).TotalSeconds / PrimaryTimer.TotalSeconds, 0, 1)) * 100;
+    public string AlarmText => PrimaryAlarm.Phase switch
     {
         AlarmPhase.Ringing => "Alarm ringing",
-        AlarmPhase.Snoozed => $"Snoozed until {_timerAlarmService.State.Alarm.SnoozeUntil:t}",
-        AlarmPhase.Scheduled => $"Alarm {TimerAlarmService.FormatAlarmTime(_timerAlarmService.State.Alarm)}"
-            + (_timerAlarmService.State.Alarm.Repeat == AlarmRepeat.Once ? "" : $" · {TimerAlarmService.FormatRepeat(_timerAlarmService.State.Alarm.Repeat)}"),
+        AlarmPhase.Snoozed => $"Snoozed until {PrimaryAlarm.SnoozeUntil:t}",
+        AlarmPhase.Scheduled => $"Alarm {TimerAlarmService.FormatAlarmTime(PrimaryAlarm)}"
+            + (PrimaryAlarm.Repeat == AlarmRepeat.Once ? "" : $" · {TimerAlarmService.FormatRepeat(PrimaryAlarm.Repeat)}"),
         _ => "No alarm"
     };
 
@@ -1020,9 +1004,9 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         ? QuoteText
         : PrimaryActivity switch
         {
-            IslandActivity.Alarm => _timerAlarmService.State.Alarm.Phase == AlarmPhase.Ringing
-                ? "Alarm" : TimerAlarmService.FormatAlarmTime(_timerAlarmService.State.Alarm),
-            IslandActivity.Timer => _timerAlarmService.State.Timer.Phase == TimerPhase.Completed
+            IslandActivity.Alarm => PrimaryAlarm.Phase == AlarmPhase.Ringing
+                ? "Alarm" : TimerAlarmService.FormatAlarmTime(PrimaryAlarm),
+            IslandActivity.Timer => PrimaryTimer.Phase == TimerPhase.Completed
                 ? "Timer done" : TimerText,
             IslandActivity.Muted => "Muted",
             IslandActivity.Media => Media.DisplayTitle,
@@ -1049,26 +1033,11 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         }
     }
 
-    public IslandActivity PrimaryActivity
-    {
-        get
-        {
-            var timer = _timerAlarmService.State.Timer;
-            var alarm = _timerAlarmService.State.Alarm;
-            if (alarm.Phase is AlarmPhase.Ringing or AlarmPhase.Snoozed or AlarmPhase.Scheduled) return IslandActivity.Alarm;
-            // A running/paused timer owns the separate orange orb beside the compact island, so it
-            // no longer replaces current media or status content in the main pill. Completion still
-            // takes over briefly so the user cannot miss that the timer finished.
-            if (timer.Phase == TimerPhase.Completed && !timer.CompletionAcknowledged) return IslandActivity.Timer;
-            if (IsQActive) return IslandActivity.Q;
-            if (Audio.SystemMuted) return IslandActivity.Muted;
-            if (Settings.ShowMedia && Media.HasSession) return IslandActivity.Media;
-            if (Audio.ActiveAudioOutput) return IslandActivity.Audio;
-            if (Battery.IsCharging) return IslandActivity.Charging;
-            return IslandActivity.None;
-        }
-    }
-
+    public IslandActivity PrimaryActivity => ActivityPolicy.Select(
+        _timerAlarmService.State.Alarms.Any(a => a.Phase == AlarmPhase.Ringing),
+        _timerAlarmService.State.Timers.Any(t => t.Phase == TimerPhase.Completed && !t.CompletionAcknowledged),
+        IsQActive, Settings.PinnedActivity, Settings.PinnedActivity == IslandActivity.Media ? Settings.ShowMedia && Media.HasSession : DisplayTimer?.Id == Settings.PinnedTimerId,
+        Audio.SystemMuted, Settings.ShowMedia && Media.HasSession, Audio.ActiveAudioOutput, Battery.IsCharging);
     public ICommand PreviousCommand { get; }
     public ICommand PlayPauseCommand { get; }
     public ICommand NextCommand { get; }
@@ -1360,23 +1329,6 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         RaiseMany(nameof(ShowNextMeeting), nameof(MeetingTitle), nameof(MeetingWhen), nameof(HasMeetingJoin),
             nameof(ShowWidgetsPanel), nameof(LiveWidgetRailWidth));
     });
-    private void OnNotified(object? sender, NotificationInfo value) => OnUi(() =>
-    {
-        if (!Settings.ShowNotifications || !PassesNotificationFilter(value.App)) return;
-        if (Settings.NotificationHistoryEnabled)
-        {
-            _currentNotificationHistoryItem = _notificationHistoryService.Add(value.App, value.Title, value.Body, value.CreatedAt);
-            RefreshNotificationHistory();
-        }
-        _notification = value;
-        _notificationSeq++;
-        _bannerSeq++;
-        RaiseMany(nameof(ShowNotification), nameof(NotificationApp), nameof(NotificationTitle), nameof(NotificationBody), nameof(NotificationSeq),
-            nameof(ShowBanner), nameof(IsAirPodsBannerActive), nameof(BannerApp), nameof(BannerTitle), nameof(BannerBody), nameof(BannerSeq));
-        _notificationTimer.Stop();
-        if (!FocusModeEnabled) _notificationTimer.Start();
-    });
-
     private void RefreshNotificationHistory()
     {
         NotificationHistory.Clear();
@@ -1390,38 +1342,26 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
     {
         if (_currentNotificationHistoryItem is not null)
             _notificationHistoryService.Dismiss(_currentNotificationHistoryItem.Id);
+        if (_currentGroup is { } group) foreach (var item in group.Items) _notificationHistoryService.Dismiss(item.Id);
+        _currentGroup = null;
         _currentNotificationHistoryItem = null;
         _notification = null;
-        _notificationTimer.Stop();
         RefreshNotificationHistory();
         RaiseMany(nameof(ShowNotification), nameof(ShowBanner), nameof(IsAirPodsBannerActive), nameof(BannerApp), nameof(BannerTitle), nameof(BannerBody));
     }
 
     private static void OpenNotification(NotificationHistoryItem? item)
     {
-        if (item is null || string.IsNullOrWhiteSpace(item.App)) return;
+        if (item is null) return;
         try
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = item.App,
-                UseShellExecute = true
-            });
+            var start = new System.Diagnostics.ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+            start.ArgumentList.Add(string.IsNullOrWhiteSpace(item.AppId) ? "shell:AppsFolder" : "shell:AppsFolder\\" + item.AppId);
+            System.Diagnostics.Process.Start(start);
         }
         catch { }
     }
-
-    private async Task PersistSettingsAsync()
-    {
-        var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DynamicIsland.Windows");
-        try
-        {
-            Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, "settings.json");
-            await File.WriteAllTextAsync(path, System.Text.Json.JsonSerializer.Serialize(Settings, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch { }
-    }
+    private Task PersistSettingsAsync() => _settingsPersistence.SaveAsync(Settings);
 
     // Allowlist shows only matching apps; blocklist hides them. Matching is case-insensitive substring.
     private bool PassesNotificationFilter(string app)
@@ -1497,11 +1437,11 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
             nameof(CountdownText), nameof(WorldClocks), nameof(MeetingWhen));
     });
     private void RaiseMany(params string[] names) { foreach (var n in names) RaisePropertyChanged(n); }
-    private void OnTimerAlarmChanged(object? sender, EventArgs e) => OnUi(() => RaiseMany(
-        nameof(TimerText), nameof(TimerProgress), nameof(TimerRemainingProgress), nameof(ShowTimerOrb), nameof(AlarmText), nameof(PrimaryActivity), nameof(ShowQSurface),
+    private void OnTimerAlarmChanged(object? sender, EventArgs e) => OnUi(() => { RefreshActivities(); RaiseMany(
+        nameof(TimerText), nameof(TimerProgress), nameof(TimerRemainingProgress), nameof(ShowTimerOrb), nameof(AlarmText), nameof(PrimaryActivity),
         nameof(CompactGlyph), nameof(CompactPrimaryText), nameof(CompactSecondaryText),
         nameof(ShowCompactArt), nameof(ShowCompactMediaRing), nameof(ShowCompactTimerRing),
-        nameof(ShowCompactRingTrack)));
+        nameof(ShowCompactRingTrack)); });
     private void OnSystemThemeChanged(object? sender, EventArgs e) => OnUi(() =>
     {
         IsDarkTheme = _themeService.IsDark(Settings.Theme);
@@ -1866,7 +1806,10 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         _spectrumService.BandsChanged -= OnSpectrumChanged;
         _stocksService.Changed -= OnStocksChanged;
         _calendarService.Changed -= OnMeetingChanged;
-        _notificationService.Notified -= OnNotified;
+        _notificationService.BatchReceived -= OnNotificationBatch;
+        _calendarService.StatusChanged -= OnIntegrationStatusChanged;
+        _notificationService.StatusChanged -= OnIntegrationStatusChanged;
+        if (_clipboardIntegration is not null) _clipboardIntegration.StatusChanged -= OnIntegrationStatusChanged;
         _privacyService.Changed -= OnPrivacyChanged;
         _notificationTimer.Stop();
         _volumeWarningTimer.Stop();

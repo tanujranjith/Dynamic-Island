@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -40,8 +40,9 @@ public partial class IslandWindow : Window
     private Storyboard? _qThinkingAnimation;
     private bool _qFollowLatest = true;
 
-    private const double TimerPanelWidth = 1000d;
-    private const double TimerPanelHeight = 520d;
+    private double TimerPanelWidth => WindowSizingPolicy.BoundedDimension(1000, AvailableWorkArea.Width);
+    private double TimerPanelHeight => WindowSizingPolicy.BoundedDimension(520, AvailableWorkArea.Height, 76);
+    private (double Width, double Height) AvailableWorkArea => _position.AvailableSize(this, _viewModel.Settings);
     private const double LiveTimerExtraHeight = 86d;
 
     public event EventHandler? OpenSettingsRequested;
@@ -74,7 +75,7 @@ public partial class IslandWindow : Window
             _idleTimer.Stop();
             if (_viewModel.Settings.IdleDimming && !GlassShell.IsMouseOver) SetDimmed(true);
         };
-        _fullscreenTimer.Tick += (_, _) => { CheckFullscreen(); CheckFollowScreen(); EnsureHealthy(); _qScreen.RememberForeground(new System.Windows.Interop.WindowInteropHelper(this).Handle); };
+        _fullscreenTimer.Tick += (_, _) => { _viewModel.InteractionProtected = _timerPanelOpen || IsKeyboardFocusWithin || Mouse.Captured is not null; CheckFullscreen(); CheckFollowScreen(); EnsureHealthy(); _qScreen.RememberForeground(new System.Windows.Interop.WindowInteropHelper(this).Handle); };
         _fullscreenTimer.Start();
         SourceInitialized += (_, _) =>
         {
@@ -95,17 +96,24 @@ public partial class IslandWindow : Window
             QContent.SizeChanged += (_, _) => UpdateAutoGrow();
             StatsExpandedContent.SizeChanged += (_, _) => UpdateAutoGrow();
             StatsOverlay.SizeChanged += (_, _) => UpdateAutoGrow();
-            GlassShell.SizeChanged += (_, _) => ApplyRoundedShellClip();
+            GlassShell.SizeChanged += (_, _) => { ApplyRoundedShellClip(); UrgentAlertStrip.Margin = new Thickness(12, GlassShell.ActualHeight + 12, 12, 0); UrgentAlertStrip.MaxWidth = Math.Max(1, Math.Min(650, ActualWidth - 24)); };
         };
+        GotKeyboardFocus += (_, _) => _viewModel.InteractionProtected = true;
+        LostKeyboardFocus += (_, _) => Dispatcher.BeginInvoke(() => _viewModel.InteractionProtected = _timerPanelOpen || IsKeyboardFocusWithin || Mouse.Captured is not null);
+        GotMouseCapture += (_, _) => _viewModel.InteractionProtected = true;
+        LostMouseCapture += (_, _) => _viewModel.InteractionProtected = _timerPanelOpen || IsKeyboardFocusWithin;
         _viewModel.PropertyChanged += ViewModelOnPropertyChanged;
+        _viewModel.NotificationGroupOpenRequested += OnNotificationGroupOpen;
         _timerViewModel.PropertyChanged += TimerViewModelOnPropertyChanged;
         SystemEvents.DisplaySettingsChanged += SystemEventsOnDisplaySettingsChanged;
+        DpiChanged += (_, _) => Dispatcher.BeginInvoke(() => ApplyLayout(animate: false), DispatcherPriority.Loaded);
         SystemEvents.PowerModeChanged += SystemEventsOnPowerModeChanged;
         Closed += (_, _) =>
         {
             SystemEvents.DisplaySettingsChanged -= SystemEventsOnDisplaySettingsChanged;
             SystemEvents.PowerModeChanged -= SystemEventsOnPowerModeChanged;
             _viewModel.PropertyChanged -= ViewModelOnPropertyChanged;
+            _viewModel.NotificationGroupOpenRequested -= OnNotificationGroupOpen;
             _timerViewModel.PropertyChanged -= TimerViewModelOnPropertyChanged;
             _fullscreenTimer.Stop();
             _idleTimer.Stop();
@@ -190,7 +198,7 @@ public partial class IslandWindow : Window
         if (e.PropertyName == nameof(IslandViewModel.IsExpanded))
         {
             if (_suppressExpandedAnimation) return;
-            if (_timerPanelOpen) _timerPanelOpen = false;
+            if (_timerPanelOpen) _timerPanelOpen = false; _viewModel.TimerEditorOpen = false; _viewModel.InteractionProtected = IsKeyboardFocusWithin;
             _position.ApplyWindowStyles(this, _viewModel.Settings, _viewModel.IsCompact);
             // Dynamic rows (AirPods, timers, quotes) can appear while the island is compact.
             // Recompute the host HWND before expanding; animating only the inner shell leaves the
@@ -476,7 +484,10 @@ public partial class IslandWindow : Window
         // The transparent HWND must be at least as tall as the pill, otherwise WPF clips
         // a correctly measured Stats dashboard at the canvas boundary.
         var windowHeight = Math.Max(BaseCanvasH + quoteSpace + timerSpace, expandedHeight + 40d);
-        return (compactWidth, compactHeight, expandedWidth, expandedHeight, CanvasW, windowHeight);
+                var available = AvailableWorkArea;
+        expandedWidth = WindowSizingPolicy.BoundedDimension(expandedWidth, available.Width);
+        expandedHeight = WindowSizingPolicy.BoundedDimension(expandedHeight, available.Height, 76);
+        return (compactWidth, compactHeight, expandedWidth, expandedHeight, Math.Min(CanvasW, available.Width), Math.Min(available.Height, Math.Max(windowHeight, expandedHeight + 64)));
     }
 
     // When auto-grow is on, size the expanded pill to its content so nothing clips.
@@ -500,10 +511,10 @@ public partial class IslandWindow : Window
             // vertical growth. Dynamic rows (AirPods, timer, quotes) can otherwise be arranged
             // below the fixed shell and get cut in half even though the host window is tall enough.
             var w = _viewModel.Settings.AutoGrowPill
-                ? Math.Clamp(d.Width + 2, m.eW, CanvasW - 24)
+                ? Math.Clamp(d.Width + 2, m.eW, Math.Max(m.eW, Math.Min(CanvasW - 24, AvailableWorkArea.Width - 24)))
                 : m.eW;
             var h = WindowSizingPolicy.AntiClippingDimension(m.eH, d.Height + 2, m.winH - 12);
-            return (w, h);
+            return (WindowSizingPolicy.BoundedDimension(w, AvailableWorkArea.Width), WindowSizingPolicy.BoundedDimension(h, AvailableWorkArea.Height, 76));
         }
         catch { return (m.eW, m.eH); }
     }
@@ -614,11 +625,17 @@ public partial class IslandWindow : Window
         // QContent and TimerPanelContent are overlays hosted inside ExpandedContent. Keep the
         // shared expanded parent mounted while either overlay is active; collapsing the parent
         // makes the Island render as a black shell even though the child overlay is visible.
+                ExpandedViewport.Visibility = expanded || _timerPanelOpen ? Visibility.Visible : Visibility.Collapsed;
+        ExpandedContent.Width = Math.Max(600, (_timerPanelOpen ? TimerPanelWidth : Metrics().eW) - (q ? 0 : 56));
+        ExpandedContent.Height = q ? Metrics().eH : _timerPanelOpen ? Math.Max(200, TimerPanelHeight - 44) : double.NaN;
         SetModeContent(ExpandedContent, expanded || _timerPanelOpen);
         SetModeContent(QContent, expanded && q);
         SetModeContent(StatsCompactContent, !apple && !_viewModel.IsEdgePill && !_viewModel.IsHolePunchMode && !expanded && !_timerPanelOpen);
         SetModeContent(StatsExpandedContent, false);
         SetModeContent(StatsOverlay, !apple && expanded && !_timerPanelOpen);
+        TimerPanelContent.Height = Math.Max(180, TimerPanelHeight - 44);
+        TimerPanelContent.VerticalAlignment = VerticalAlignment.Top;
+        TimerTabContent.Height = AlarmTabContent.Height = Math.Max(100, TimerPanelHeight - 216);
         SetModeContent(TimerPanelContent, _timerPanelOpen && !q);
     }
 
@@ -1003,6 +1020,7 @@ public partial class IslandWindow : Window
 
     private void RecenterMenu_Click(object sender, RoutedEventArgs e) => RecenterRequested?.Invoke(this, EventArgs.Empty);
     private void ClipboardMenu_Click(object sender, RoutedEventArgs e) => OpenClipboardRequested?.Invoke(this, EventArgs.Empty);
+    private void OnNotificationGroupOpen(object? sender, EventArgs e) => NotificationHistoryPopup.IsOpen = true;
     private void NotificationHistoryMenu_Click(object sender, RoutedEventArgs e)
     {
         _viewModel.OpenNotificationHistoryCommand.Execute(null);
@@ -1013,8 +1031,7 @@ public partial class IslandWindow : Window
 
     private void OpenNotification_Click(object sender, RoutedEventArgs e)
     {
-        if (_viewModel.NotificationHistory.Count > 0)
-            _viewModel.OpenNotificationCommand.Execute(_viewModel.NotificationHistory[0]);
+        _viewModel.OpenCurrentNotificationCommand.Execute(null);
         e.Handled = true;
     }
 
@@ -1078,6 +1095,15 @@ public partial class IslandWindow : Window
         UpdateLiveWidgetsOverflow(scroller);
     }
 
+    private void AccessoryLane_SizeChanged(object sender, SizeChangedEventArgs e) => _viewModel.SetAccessoryLaneWidth(e.NewSize.Width);
+    private void LiveWidgetsPreviousButton_Click(object sender, RoutedEventArgs e) { LiveWidgetsScroller.ScrollToHorizontalOffset(Math.Max(0, LiveWidgetsScroller.HorizontalOffset - 160)); e.Handled = true; }
+    private void LiveWidgetsScroller_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Left or Key.Right or Key.Home or Key.End)) return;
+        var target = e.Key switch { Key.Home => 0, Key.End => LiveWidgetsScroller.ScrollableWidth, Key.Left => LiveWidgetsScroller.HorizontalOffset - 160, _ => LiveWidgetsScroller.HorizontalOffset + 160 };
+        LiveWidgetsScroller.ScrollToHorizontalOffset(Math.Clamp(target, 0, LiveWidgetsScroller.ScrollableWidth)); e.Handled = true;
+    }
+    private void LiveWidgetsScroller_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) { if (e.NewFocus is FrameworkElement element) element.BringIntoView(); }
     private void LiveWidgetsMoreButton_Click(object sender, RoutedEventArgs e)
     {
         LiveWidgetsScroller.ScrollToHorizontalOffset(
@@ -1090,6 +1116,7 @@ public partial class IslandWindow : Window
         // Show the fade + chevron only while widget content is clipped on the right.
         var canScrollRight = scroller.ScrollableWidth > 0d &&
             scroller.HorizontalOffset < scroller.ScrollableWidth - 1d;
+        LiveWidgetsPreviousButton.Visibility = scroller.HorizontalOffset > 1 ? Visibility.Visible : Visibility.Collapsed;
         var visibility = canScrollRight ? Visibility.Visible : Visibility.Collapsed;
         if (LiveWidgetsFade.Visibility != visibility) LiveWidgetsFade.Visibility = visibility;
         if (LiveWidgetsMoreButton.Visibility != visibility) LiveWidgetsMoreButton.Visibility = visibility;
@@ -1116,9 +1143,8 @@ public partial class IslandWindow : Window
 
     private void TimerPanel_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        // Once the pointer leaves the timer card, return to the compact live activity.
-        // Moving between controls inside the card does not raise this event.
-        CloseTimerPanel();
+        // Keep the editor stable while typing or using a dropdown.
+        if (!IsKeyboardFocusWithin && Mouse.Captured is null) CloseTimerPanel();
     }
 
     public void ShowTimerPanel()
@@ -1132,7 +1158,7 @@ public partial class IslandWindow : Window
             _viewModel.IsExpanded = false;
             _suppressExpandedAnimation = false;
         }
-        _timerPanelOpen = true;
+        _timerPanelOpen = true; _viewModel.TimerEditorOpen = true; _viewModel.InteractionProtected = true;
         ShowTimerTab();
         ForceShow();
         _position.ApplyWindowStyles(this, _viewModel.Settings, compact: false);
@@ -1149,7 +1175,7 @@ public partial class IslandWindow : Window
     public void CloseTimerPanel()
     {
         if (!_timerPanelOpen) return;
-        _timerPanelOpen = false;
+        _timerPanelOpen = false; _viewModel.TimerEditorOpen = false; _viewModel.InteractionProtected = IsKeyboardFocusWithin;
         _position.ApplyWindowStyles(this, _viewModel.Settings, compact: true);
         ApplyLayout(animate: true);
         _log.Info("In-island timer panel closed");
@@ -1337,4 +1363,3 @@ public partial class IslandWindow : Window
             });
     }
 }
-

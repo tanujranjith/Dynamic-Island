@@ -9,6 +9,14 @@ namespace DynamicIsland.Windows.Services;
 
 public sealed class WindowPositionService
 {
+    internal (double Width, double Height)? VerificationWorkArea { get; set; }
+    public (double Width, double Height) AvailableSize(Window window, AppSettings settings)
+    {
+        if (AppDataPaths.IsPreview && VerificationWorkArea is { } fixture) return fixture;
+        var screen = SelectScreen(settings);
+        var scale = Math.Max(96u, NativeMethods.GetDpiForWindow(new WindowInteropHelper(window).Handle)) / 96d;
+        return (screen.WorkingArea.Width / scale, screen.WorkingArea.Height / scale);
+    }
     // Transparent margin around the visible pill (matches the Grid Margin in IslandWindow.xaml) and
     // the pill corner radius, in device-independent units.
     private const double PillMarginLeft = 20, PillMarginTop = 10, PillMarginRight = 20, PillMarginBottom = 18, PillRadius = 18;

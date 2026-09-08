@@ -12,7 +12,7 @@ namespace DynamicIsland.Windows;
 
 public partial class App : System.Windows.Application
 {
-    private const string ShowSettingsSignalName = "Local\\DynamicIsland.Windows.ShowSettings";
+    private static string ShowSettingsSignalName => "Local\\DynamicIsland.Windows.ShowSettings" + Infrastructure.AppDataPaths.InstanceSuffix;
     private Mutex? _singleInstance;
     private EventWaitHandle? _showSettingsSignal;
     private LoggingService? _log;
@@ -54,9 +54,17 @@ public partial class App : System.Windows.Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Contains("--verify-upgrades"))
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            if (!Infrastructure.AppDataPaths.IsPreview) { Shutdown(2); return; }
+            try { await Infrastructure.UpgradeVerification.RunAsync(); Shutdown(0); }
+            catch (Exception ex) { Directory.CreateDirectory(Infrastructure.AppDataPaths.Root); File.WriteAllText(Path.Combine(Infrastructure.AppDataPaths.Root, "verification-error.txt"), ex.ToString()); Shutdown(1); }
+            return;
+        }
         var openSettingsFromCommandLine = e.Args
             .Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase));
-        _singleInstance = new Mutex(true, "Local\\DynamicIsland.Windows.SingleInstance", out var firstInstance);
+        _singleInstance = new Mutex(true, "Local\\DynamicIsland.Windows.SingleInstance" + Infrastructure.AppDataPaths.InstanceSuffix, out var firstInstance);
         if (!firstInstance)
         {
             if (openSettingsFromCommandLine)
@@ -135,7 +143,8 @@ public partial class App : System.Windows.Application
         _position = new WindowPositionService();
         _islandViewModel = new IslandViewModel(_settings, _media, _audio, _battery, _clock, _timerAlarm, _theme,
             _weather, _sysMon, _spectrum, _stocks, _calendar, _notifications, _privacy, _notificationHistory,
-            _qSession, _qScreen, _qSpeech, _qSecrets, _codexAccount, _airPods);
+            _qSession, _qScreen, _qSpeech, _qSecrets, _codexAccount, _airPods, _settingsService);
+        _islandViewModel.AttachClipboard(_clipboard);
         _timerViewModel = new TimerAlarmViewModel(_timerAlarm, _settings.Use24HourClock);
         _islandWindow = new IslandWindow(_islandViewModel, _timerViewModel, _position, _settingsService, _log, _qScreen);
         _islandWindow.OpenSettingsRequested += (_, _) => ShowSettings();
@@ -154,7 +163,7 @@ public partial class App : System.Windows.Application
             _tray.ShowNotification(args.Title, args.Message));
 
         _islandWindow.Show();
-        _ = _codexAccount.RefreshAsync();
+        if (!Infrastructure.AppDataPaths.IsPreview) _ = _codexAccount.RefreshAsync();
         _hotkeys = new GlobalHotkeyService(_log);
         _hotkeys.Attach(_islandWindow);
         _hotkeys.Register("Expand/collapse", Interop.NativeMethods.HotkeyModifierControl | Interop.NativeMethods.HotkeyModifierAlt, 0x20,
@@ -162,7 +171,7 @@ public partial class App : System.Windows.Application
         _hotkeys.Register("Mute", Interop.NativeMethods.HotkeyModifierControl | Interop.NativeMethods.HotkeyModifierAlt, (uint)'M',
             () => _islandViewModel.ToggleMuteCommand.Execute(null));
         _hotkeys.Register("Timer", Interop.NativeMethods.HotkeyModifierControl | Interop.NativeMethods.HotkeyModifierAlt, (uint)'T',
-            () => _islandWindow.ToggleTimerPanel());
+            ToggleDefaultTimer);
         _hotkeys.Register("Focus mode", Interop.NativeMethods.HotkeyModifierControl | Interop.NativeMethods.HotkeyModifierAlt, (uint)'F',
             ToggleFocus);
         _hotkeys.Register("Open settings", Interop.NativeMethods.HotkeyModifierControl | Interop.NativeMethods.HotkeyModifierAlt, (uint)'S',
@@ -246,7 +255,7 @@ public partial class App : System.Windows.Application
         _tray?.SyncChecks();
     }
 
-    private bool _calendarStarted, _notificationsStarted;
+    private bool _liveSettingsApplied, _clipboardEnabled;
     private void ApplyLiveActivitySettings()
     {
         if (_settings is null) return;
@@ -257,8 +266,10 @@ public partial class App : System.Windows.Application
         else _sysMon?.Stop();
         if (_settings.RealAudioSpectrum) _spectrum?.Start();
         else _spectrum?.Stop();
-        if (_settings.ShowNextMeeting && !_calendarStarted) { _calendarStarted = true; _ = _calendar!.StartAsync(); }
-        if (_settings.ShowNotifications && !_notificationsStarted) { _notificationsStarted = true; _ = _notifications!.StartAsync(); }
+        if (_settings.ShowNextMeeting) _ = _calendar!.StartAsync(_liveSettingsApplied); else _calendar!.Stop();
+        if (_settings.ShowNotifications) _ = _notifications!.StartAsync(_liveSettingsApplied); else _notifications!.Stop();
+        if (!_liveSettingsApplied || _clipboardEnabled != _settings.ShowClipboard) { _clipboardEnabled = _settings.ShowClipboard; _clipboard!.Configure(_clipboardEnabled); }
+        _liveSettingsApplied = true;
     }
 
     // Clipboard history flyout: list of recent text items; click to copy back.
@@ -272,7 +283,7 @@ public partial class App : System.Windows.Application
         {
             panel.Children.Add(new System.Windows.Controls.TextBlock
             {
-                Text = "Clipboard history is empty or off.\nTurn it on with Win+V.",
+                Text = _clipboard.Status.Message,
                 Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x9A, 0xA8, 0xBB)),
                 FontSize = 12, Margin = new Thickness(12), TextWrapping = TextWrapping.Wrap, MaxWidth = 300
             });
@@ -298,6 +309,16 @@ public partial class App : System.Windows.Application
             }
         }
 
+        if (items.Count == 0)
+        {
+            var retry = new System.Windows.Controls.Button { Content = "Retry", Margin = new Thickness(8), Padding = new Thickness(8) };
+            retry.Click += async (_, _) => { win?.Close(); await ShowClipboardAsync(); }; panel.Children.Add(retry);
+            if (_clipboard.Status.SettingsUri is string uri)
+            {
+                var setup = new System.Windows.Controls.Button { Content = "Open Windows Settings", Margin = new Thickness(8), Padding = new Thickness(8) };
+                setup.Click += (_, _) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri) { UseShellExecute = true }); panel.Children.Add(setup);
+            }
+        }
         var card = new System.Windows.Controls.Border
         {
             Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1B, 0x22, 0x2D)),
@@ -393,8 +414,9 @@ public partial class App : System.Windows.Application
     private void ToggleDefaultTimer()
     {
         if (_timerAlarm is null) return;
-        if (_timerAlarm.State.Timer.Phase == TimerPhase.Running) _timerAlarm.PauseTimer();
-        else if (_timerAlarm.State.Timer.Phase == TimerPhase.Paused) _timerAlarm.ResumeTimer();
+        var displayed = _islandViewModel?.DisplayTimer;
+        if (displayed is { Phase: TimerPhase.Running }) _timerAlarm.PauseTimer(displayed.Id);
+        else if (displayed is { Phase: TimerPhase.Paused }) _timerAlarm.ResumeTimer(displayed.Id);
         else _timerAlarm.StartTimer(TimeSpan.FromMinutes(10), "Shortcut timer");
     }
 
