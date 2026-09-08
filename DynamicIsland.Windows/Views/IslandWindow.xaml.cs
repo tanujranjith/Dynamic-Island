@@ -683,8 +683,9 @@ public partial class IslandWindow : Window
         _animatedShellShadow = null;
     }
 
-    // This is the original real-island animation path: animate GlassShell itself inside the fixed,
-    // transparent HWND. The preserved working build used this exact BackEase/QuinticEase approach.
+    // Morph the already-laid-out shell with a render transform. Animating Width/Height makes WPF
+    // measure and arrange the whole media/widget/Q tree for every frame, which is especially costly
+    // on the transparent window. Width/Height are committed only at the two ends of the morph.
     private void AnimatePill(bool animate)
     {
         var generation = ++_pillAnimationGeneration;
@@ -709,6 +710,9 @@ public partial class IslandWindow : Window
         {
             GlassShell.BeginAnimation(WidthProperty, null);
             GlassShell.BeginAnimation(HeightProperty, null);
+            PillScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            PillScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            PillScale.ScaleX = PillScale.ScaleY = 1d;
             GlassShell.Width = targetW;
             GlassShell.Height = targetH;
             ApplyVisualMode();
@@ -732,11 +736,26 @@ public partial class IslandWindow : Window
             _log.Info($"Real island animation started: expanded={expanded}, from={GlassShell.ActualWidth:0.#}x{GlassShell.ActualHeight:0.#}, target={targetW:0.#}x{targetH:0.#}, duration={duration.TotalMilliseconds:0}ms");
         }
 
-        var widthAnimation = new DoubleAnimation(targetW, duration) { EasingFunction = ease };
-        var heightAnimation = new DoubleAnimation(targetH, duration) { EasingFunction = ease };
-        heightAnimation.Completed += (_, _) => FinishPillMorph(generation, targetW, targetH, expanded);
-        GlassShell.BeginAnimation(WidthProperty, widthAnimation);
-        GlassShell.BeginAnimation(HeightProperty, heightAnimation);
+        var expandedWidth = Math.Max(targetW, eW);
+        var expandedHeight = Math.Max(targetH, eH);
+        var startScaleX = expanded ? Math.Clamp(m.cW / expandedWidth, 0.1, 1) : 1d;
+        var startScaleY = expanded ? Math.Clamp(m.cH / expandedHeight, 0.1, 1) : 1d;
+        var endScaleX = expanded ? 1d : Math.Clamp(m.cW / expandedWidth, 0.1, 1);
+        var endScaleY = expanded ? 1d : Math.Clamp(m.cH / expandedHeight, 0.1, 1);
+
+        // Keep the shell at its expanded layout bounds while collapsing so the scaled visual is
+        // not clipped by a compact Border before the transform reaches its endpoint.
+        GlassShell.BeginAnimation(WidthProperty, null);
+        GlassShell.BeginAnimation(HeightProperty, null);
+        GlassShell.Width = expandedWidth;
+        GlassShell.Height = expandedHeight;
+        PillScale.ScaleX = startScaleX;
+        PillScale.ScaleY = startScaleY;
+        var scaleXAnimation = new DoubleAnimation(endScaleX, duration) { EasingFunction = ease };
+        var scaleYAnimation = new DoubleAnimation(endScaleY, duration) { EasingFunction = ease };
+        scaleYAnimation.Completed += (_, _) => FinishPillMorph(generation, targetW, targetH, expanded);
+        PillScale.BeginAnimation(ScaleTransform.ScaleXProperty, scaleXAnimation);
+        PillScale.BeginAnimation(ScaleTransform.ScaleYProperty, scaleYAnimation);
 
         if (expanded)
         {
