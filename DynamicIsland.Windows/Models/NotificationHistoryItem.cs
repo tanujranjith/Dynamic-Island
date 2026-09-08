@@ -6,7 +6,8 @@ public sealed record NotificationHistoryItem(
     string Title,
     string Body,
     DateTimeOffset CreatedAt,
-    bool IsDismissed = false);
+    bool IsDismissed = false,
+    string AppId = "");
 
 public sealed record FocusModeState(bool Enabled);
 

@@ -12,7 +12,7 @@ public enum QCaptureMode { ActiveWindow, ActiveMonitor }
 
 public sealed class AppSettings
 {
-    public int SchemaVersion { get; set; } = 9;
+    public int SchemaVersion { get; set; } = 11;
     public bool LaunchOnStartup { get; set; }
     public bool AlwaysOnTop { get; set; } = true;
     public bool LockPosition { get; set; }
@@ -33,6 +33,8 @@ public sealed class AppSettings
     public bool ShowDate { get; set; } = true;
     public bool ShowTimerAlarm { get; set; } = true;
     public bool FocusModeEnabled { get; set; }
+    public IslandActivity PinnedActivity { get; set; } = IslandActivity.None;
+    public Guid? PinnedTimerId { get; set; }
     public bool NotificationHistoryEnabled { get; set; } = true;
     public bool Use24HourClock { get; set; }
     public bool ShowSeconds { get; set; }

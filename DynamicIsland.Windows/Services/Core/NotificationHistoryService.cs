@@ -8,7 +8,7 @@ public sealed class NotificationHistoryService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly TimeSpan Retention = TimeSpan.FromDays(7);
-    private const int MaxItems = 20;
+    private const int MaxItems = 100;
     private readonly LoggingService _log;
     private readonly string _path;
     private readonly List<NotificationHistoryItem> _items = [];
@@ -16,7 +16,7 @@ public sealed class NotificationHistoryService
     public NotificationHistoryService(LoggingService log)
     {
         _log = log;
-        var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DynamicIsland.Windows");
+        var directory = DynamicIsland.Windows.Infrastructure.AppDataPaths.Root;
         Directory.CreateDirectory(directory);
         _path = Path.Combine(directory, "notification-history.json");
         Load();
@@ -24,10 +24,10 @@ public sealed class NotificationHistoryService
 
     public IReadOnlyList<NotificationHistoryItem> Items => _items;
 
-    public NotificationHistoryItem Add(string app, string title, string body, DateTimeOffset? createdAt = null)
+    public NotificationHistoryItem Add(string app, string title, string body, DateTimeOffset? createdAt = null, string appId = "")
     {
         Prune();
-        var item = new NotificationHistoryItem(Guid.NewGuid(), app, title, body, createdAt ?? DateTimeOffset.Now);
+        var item = new NotificationHistoryItem(Guid.NewGuid(), app, title, body, createdAt ?? DateTimeOffset.Now, AppId: appId);
         _items.Insert(0, item);
         Trim();
         Save();
