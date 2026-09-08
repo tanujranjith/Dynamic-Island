@@ -143,3 +143,5 @@ The outer ScrollViewer introduced by the upgrade displayed automatic scrollbars 
 Verification: 119 unit tests passed; Release build has zero warnings/errors. Native verification now exercises expressive animation, checks five in-flight samples for stable viewport size and absent outer scrollbars, limits expanded-content resize events, verifies interrupted morph recovery, and checks that the constrained viewport still scrolls. Evidence: `artifacts/upgrade-verification/47b8cf28002641cdb1c88acd2573bb6e/captures/`. This confirms removal of repeated content resizing; it is not a live GPU frame-rate measurement.
 
 The follow-up morph pass moves the shell with a render transform and commits layout dimensions only at the start and end. The same native checks passed after this change, with no per-frame Width/Height animation remaining.
+
+Collapse now keeps the expanded surface mounted while the render transform shrinks, fades the compact surface in during the final portion, and commits the compact layout after the transform completes. Native checks cover the intermediate and settled states.

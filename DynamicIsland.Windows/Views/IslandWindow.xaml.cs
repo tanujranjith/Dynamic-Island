@@ -769,8 +769,33 @@ public partial class IslandWindow : Window
         }
         else
         {
-            compactContent.Opacity = 1d;
-            compactContent.IsHitTestVisible = true;
+            // Keep the expanded surface mounted while it shrinks. Switching to the compact tree
+            // before the transform starts makes collapse look like a clipped content replacement.
+            // Cross-fade the compact tree near the end, then ApplyVisualMode commits the compact
+            // layout after the shell reaches its final bounds.
+            ExpandedViewport.Visibility = Visibility.Visible;
+            ExpandedContent.Visibility = Visibility.Visible;
+            ExpandedContent.Opacity = 1d;
+            ExpandedContent.IsHitTestVisible = false;
+            expandedContent.Visibility = Visibility.Visible;
+            expandedContent.Opacity = 1d;
+            expandedContent.IsHitTestVisible = false;
+            compactContent.Visibility = Visibility.Visible;
+            compactContent.Opacity = 0d;
+            compactContent.IsHitTestVisible = false;
+
+            var expandedFade = new DoubleAnimation(0d, duration)
+            {
+                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.42),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+            };
+            var compactFade = new DoubleAnimation(1d, duration)
+            {
+                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.55),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            expandedContent.BeginAnimation(UIElement.OpacityProperty, expandedFade);
+            compactContent.BeginAnimation(UIElement.OpacityProperty, compactFade);
         }
     }
 

@@ -89,6 +89,7 @@ internal static class UpgradeVerification
         // or an expanded subtree that gets resized on every shell animation frame.
         var viewport = (ScrollViewer)window.FindName("ExpandedViewport");
         var expandedContent = (FrameworkElement)window.FindName("ExpandedContent");
+        var compactContent = (FrameworkElement)window.FindName("CompactContent");
         settings.AnimationIntensity = AnimationIntensity.Expressive;
         vm.IsExpanded = false; window.ApplySettings();
         vm.IsExpanded = true; window.UpdateLayout();
@@ -112,6 +113,15 @@ internal static class UpgradeVerification
         vm.IsExpanded = false; await Task.Delay(50); vm.IsExpanded = true;
         await Task.Delay(450); window.UpdateLayout();
         Check(Math.Abs(shell.ActualWidth - viewport.ActualWidth) < 1, "Interrupted morph returns to the expanded bounds");
+        vm.IsExpanded = false; window.UpdateLayout();
+        await Task.Delay(90); window.UpdateLayout();
+        Check(expandedContent.Visibility == Visibility.Visible && expandedContent.Opacity > 0.1,
+            "Collapse keeps the expanded surface mounted during the shrink");
+        Check(viewport.Visibility == Visibility.Visible && shell.ActualWidth > settings.IslandWidth,
+            "Collapse uses the expanded layout bounds until the morph completes");
+        await Task.Delay(360); window.UpdateLayout();
+        Check(Math.Abs(shell.ActualWidth - settings.IslandWidth) < 1 && compactContent.Visibility == Visibility.Visible,
+            "Collapse commits the compact layout after the morph");
         settings.AnimationIntensity = AnimationIntensity.Reduced;
         vm.IsExpanded = true; window.ApplySettings(); await Capture("apple-no-airpods");
         var widgets = (ScrollViewer)window.FindName("LiveWidgetsScroller");
