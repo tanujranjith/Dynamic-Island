@@ -135,3 +135,9 @@ Scope: isolated `codex/island-core-upgrades` worktree, based on `ae5c8af`. The e
 - Raster scaling is not physical mixed-DPI testing. Real AirPods reconnects, Windows permission prompts, audible alerts, suspend/resume, and physical monitor transitions remain device-validation items.
 
 Result: automated and fixture-based validation passed; live-device validation remains as described above. The original checkout and running application were not replaced.
+
+## Expansion scrollbar and layout regression — 2026-09-07
+
+The outer ScrollViewer introduced by the upgrade displayed automatic scrollbars while the shell animated through smaller sizes. It also resized the expanded subtree during the morph. The outer viewport now uses hidden scrollbar chrome and stays at the destination dimensions while the rounded shell reveals its content. Inner timer and transcript scrolling remain available.
+
+Verification: 119 unit tests passed; Release build has zero warnings/errors. Native verification now exercises expressive animation, checks five in-flight samples for stable viewport size and absent outer scrollbars, limits expanded-content resize events, verifies interrupted morph recovery, and checks that the constrained viewport still scrolls. Evidence: `artifacts/upgrade-verification/47b8cf28002641cdb1c88acd2573bb6e/captures/`. This confirms removal of repeated content resizing; it is not a live GPU frame-rate measurement.

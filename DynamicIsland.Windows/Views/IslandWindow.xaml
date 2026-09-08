@@ -581,7 +581,8 @@
                 </Grid>
 
                 <!-- Expanded: one focused now-playing card. -->
-                <ScrollViewer x:Name="ExpandedViewport" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Visibility="Collapsed" CanContentScroll="False"><Grid x:Name="ExpandedContent" Margin="28,22" Opacity="0" IsHitTestVisible="False">
+                <ScrollViewer x:Name="ExpandedViewport" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"
+                              HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="Collapsed" CanContentScroll="False"><Grid x:Name="ExpandedContent" Margin="28,22" Opacity="0" IsHitTestVisible="False">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />

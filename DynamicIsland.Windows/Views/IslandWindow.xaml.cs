@@ -539,6 +539,7 @@ public partial class IslandWindow : Window
                 GlassShell.BeginAnimation(HeightProperty, null);
                 GlassShell.Width = w;
                 GlassShell.Height = h;
+                SizeExpandedViewport(w, h);
             }
         }
         finally { _inAutoGrow = false; }
@@ -653,6 +654,15 @@ public partial class IslandWindow : Window
     private Grid ActiveCompactContent => _viewModel.IsStatsStyle ? StatsCompactContent : CompactContent;
     private Grid ActiveExpandedContent => _viewModel.ShowQSurface ? QContent : _timerPanelOpen ? TimerPanelContent : ExpandedContent;
 
+    // Lay out the expanded subtree once at its destination size. The shell's rounded clip
+    // reveals it during the morph without resizing a ScrollViewer and all its children per frame.
+    // Hidden scrollbars retain wheel/keyboard scrolling when a small monitor constrains the shell.
+    private void SizeExpandedViewport(double width, double height)
+    {
+        ExpandedViewport.Width = width;
+        ExpandedViewport.Height = height;
+    }
+
     // The drop shadow is the most expensive part of each software-composited animation frame. Retain it
     // visually, but use WPF's lower-cost rendering mode until the zoom lands.
     private System.Windows.Media.Effects.DropShadowEffect? _animatedShellShadow;
@@ -686,6 +696,7 @@ public partial class IslandWindow : Window
         var (eW, eH) = ExpandedPillSize();
         var targetW = _timerPanelOpen ? TimerPanelWidth : _viewModel.IsExpanded ? eW : m.cW;
         var targetH = _timerPanelOpen ? TimerPanelHeight : _viewModel.IsExpanded ? eH : m.cH;
+        if (_viewModel.IsExpanded || _timerPanelOpen) SizeExpandedViewport(targetW, targetH);
         var reduced = _viewModel.Settings.AnimationIntensity == AnimationIntensity.Reduced;
         PillScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
         PillScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);

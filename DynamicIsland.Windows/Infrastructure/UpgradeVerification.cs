@@ -85,6 +85,34 @@ internal static class UpgradeVerification
         Check(vm.PrimaryActivity == IslandActivity.Media, "Scheduled alarm does not replace music");
         vm.PinTimerCommand.Execute(null); Check(vm.PrimaryActivity == IslandActivity.Timer, "Selected timer pin takes priority");
         vm.UnpinActivityCommand.Execute(null);
+        // Exercise real motion too: reduced-motion snapshots cannot detect transient scrollbars
+        // or an expanded subtree that gets resized on every shell animation frame.
+        var viewport = (ScrollViewer)window.FindName("ExpandedViewport");
+        var expandedContent = (FrameworkElement)window.FindName("ExpandedContent");
+        settings.AnimationIntensity = AnimationIntensity.Expressive;
+        vm.IsExpanded = false; window.ApplySettings();
+        vm.IsExpanded = true; window.UpdateLayout();
+        var stableViewport = viewport.RenderSize;
+        var contentResizes = 0;
+        SizeChangedEventHandler countResize = (_, _) => contentResizes++;
+        expandedContent.SizeChanged += countResize;
+        for (var frame = 0; frame < 5; frame++)
+        {
+            await Task.Delay(50); window.UpdateLayout();
+            Check(viewport.ComputedVerticalScrollBarVisibility != Visibility.Visible && viewport.ComputedHorizontalScrollBarVisibility != Visibility.Visible,
+                $"Expansion frame {frame}: no outer scrollbar");
+            Check(viewport.RenderSize == stableViewport, $"Expansion frame {frame}: stable content viewport");
+        }
+        await Task.Delay(180); window.UpdateLayout();
+        expandedContent.SizeChanged -= countResize;
+        Check(contentResizes <= 1, "Expanded content avoids per-frame layout resizing");
+        Check(Math.Abs(shell.ActualWidth - viewport.ActualWidth) < 1 && Math.Abs(shell.ActualHeight - viewport.ActualHeight) < 1,
+            "Expansion lands on the content viewport bounds");
+        await Capture("expansion-settled");
+        vm.IsExpanded = false; await Task.Delay(50); vm.IsExpanded = true;
+        await Task.Delay(450); window.UpdateLayout();
+        Check(Math.Abs(shell.ActualWidth - viewport.ActualWidth) < 1, "Interrupted morph returns to the expanded bounds");
+        settings.AnimationIntensity = AnimationIntensity.Reduced;
         vm.IsExpanded = true; window.ApplySettings(); await Capture("apple-no-airpods");
         var widgets = (ScrollViewer)window.FindName("LiveWidgetsScroller");
         report.Add($"Widgets: viewport={widgets.ViewportWidth}, extent={widgets.ExtentWidth}, weather={vm.WeatherWidgetWidth}, countdown={vm.CountdownWidgetWidth}, rail={vm.LiveWidgetRailWidth}");
@@ -151,6 +179,9 @@ internal static class UpgradeVerification
         position.VerificationWorkArea = (640, 480);
         window.ApplySettings(); await Capture("narrow-apple");
         Check(shell.ActualWidth <= 616 && shell.ActualHeight <= 404, "Narrow working area bounds both dimensions");
+        viewport.ScrollToRightEnd(); await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        Check(viewport.HorizontalOffset > 0, "Constrained outer viewport still scrolls with hidden chrome");
+        viewport.ScrollToLeftEnd();
         window.ShowTimerPanel(); await Capture("narrow-timers"); window.CloseTimerPanel();
         await q.BeginAsync(QMode.Ask, "fixture", "fixture", null); vm.IsExpanded = true; window.ApplySettings(); await Capture("narrow-q");
         var composerPosition = prompt.TranslatePoint(new System.Windows.Point(0, 0), shell);
