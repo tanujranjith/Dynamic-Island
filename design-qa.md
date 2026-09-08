@@ -121,3 +121,17 @@ The layout follows Apple's guidance to preserve information between compact and 
 - Capture AirPods, weather, and countdown together and confirm all three cards remain legible.
 
 final result: blocked
+
+## Core upgrades verification — 2026-09-07
+
+Scope: isolated `codex/island-core-upgrades` worktree, based on `ae5c8af`. The earlier production-capture findings above are retained as historical notes. This pass uses synthetic fixtures in real WPF controls; it does not certify live hardware behavior.
+
+- Release build: zero warnings and errors. Unit tests: 119 passed. Native assertions: 40 passed. Binding diagnostics: empty.
+- Evidence: `artifacts/upgrade-verification/5a841432d9a147fb866395aab184b64b/captures/` contains 42 local PNGs (14 surfaces at three raster scales) and `checks.txt`. These artifacts are excluded from Git.
+- Apple with and without AirPods, Stats, larger text, widget overflow, timers and alarms at the top and bottom of their scroll range, grouped notifications, Q with a ringing alarm, and constrained Apple/timer/Q views were rendered.
+- Two accessory cards fill the 708-DIP lane without false overflow. Additional widgets remain reachable by scrolling. The timer editor has a 304-DIP viewport for 658 DIPs of content; its stopwatch and lower controls are reachable. Alarm recurrence and snooze controls are reachable at the bottom.
+- Q retains its draft and continues rendering response chunks while the attached urgent strip offers snooze and dismiss. The simulated 640-by-480-DIP working area bounds the shell and keeps the composer reachable through scrolling.
+- Legacy timer migration retains an exact backup. Future-version storage is preserved. Notification grouping, dismissal, Focus Mode, history-disabled delivery, and permission placeholders passed native assertions.
+- Raster scaling is not physical mixed-DPI testing. Real AirPods reconnects, Windows permission prompts, audible alerts, suspend/resume, and physical monitor transitions remain device-validation items.
+
+Result: automated and fixture-based validation passed; live-device validation remains as described above. The original checkout and running application were not replaced.

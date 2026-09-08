@@ -85,6 +85,10 @@ references under `media/legacy/` and are no longer used as the README hero.
 
 ---
 
+## Core upgrade preview
+
+This branch adds activity pinning, queued notifications, adaptive overflow, integration status, and independent timers/alarms. See [CORE_UPGRADES.md](CORE_UPGRADES.md) for the isolated preview launcher, validation, and rollback instructions.
+
 ## Features
 
 - **Compact ↔ expanded** — a rounded pill that animates smoothly to a wide glass
