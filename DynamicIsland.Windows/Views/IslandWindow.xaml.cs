@@ -246,6 +246,7 @@ public partial class IslandWindow : Window
             // Keep the transparent host ready even when the card connects while compact. The next
             // expansion must not inherit the smaller host height that was calculated at startup.
             ApplyLayout(animate: _viewModel.IsExpanded);
+            Dispatcher.BeginInvoke(() => UpdateLiveWidgetsOverflow(LiveWidgetsScroller), DispatcherPriority.Loaded);
         }
         else if (e.PropertyName == nameof(IslandViewModel.ShowWidgetsPanel))
         {
@@ -255,6 +256,7 @@ public partial class IslandWindow : Window
             if (_timerPanelOpen) return;
             ApplyVisualMode();
             ApplyLayout(animate: _viewModel.IsExpanded);
+            Dispatcher.BeginInvoke(() => UpdateLiveWidgetsOverflow(LiveWidgetsScroller), DispatcherPriority.Loaded);
         }
         else if (e.PropertyName == nameof(IslandViewModel.IsAirPodsBannerActive))
         {
@@ -1068,6 +1070,29 @@ public partial class IslandWindow : Window
         scroller.ScrollToHorizontalOffset(
             Math.Clamp(scroller.HorizontalOffset - e.Delta, 0d, scroller.ScrollableWidth));
         e.Handled = true;
+    }
+
+    private void LiveWidgetsScroller_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (sender is not ScrollViewer scroller) return;
+        UpdateLiveWidgetsOverflow(scroller);
+    }
+
+    private void LiveWidgetsMoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        LiveWidgetsScroller.ScrollToHorizontalOffset(
+            Math.Clamp(LiveWidgetsScroller.HorizontalOffset + 160d, 0d, LiveWidgetsScroller.ScrollableWidth));
+        e.Handled = true;
+    }
+
+    private void UpdateLiveWidgetsOverflow(ScrollViewer scroller)
+    {
+        // Show the fade + chevron only while widget content is clipped on the right.
+        var canScrollRight = scroller.ScrollableWidth > 0d &&
+            scroller.HorizontalOffset < scroller.ScrollableWidth - 1d;
+        var visibility = canScrollRight ? Visibility.Visible : Visibility.Collapsed;
+        if (LiveWidgetsFade.Visibility != visibility) LiveWidgetsFade.Visibility = visibility;
+        if (LiveWidgetsMoreButton.Visibility != visibility) LiveWidgetsMoreButton.Visibility = visibility;
     }
 
     private void TimerButton_Click(object sender, RoutedEventArgs e)

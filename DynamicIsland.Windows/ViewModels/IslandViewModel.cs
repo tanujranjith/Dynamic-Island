@@ -459,6 +459,48 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         (false, true) => "Microphone in use",
         _ => "No sensor activity"
     };
+    public IReadOnlyList<string> PrivacyCameraApps => ShowCameraInUse ? _privacy.CameraApps : Array.Empty<string>();
+    public IReadOnlyList<string> PrivacyMicApps => ShowMicInUse ? _privacy.MicrophoneApps : Array.Empty<string>();
+    public bool HasPrivacySource => ShowPrivacyInUse && PrivacySourceNames.Count > 0;
+    public IReadOnlyList<string> PrivacySourceNames
+    {
+        get
+        {
+            if (!ShowPrivacyInUse) return Array.Empty<string>();
+            return _privacy.CameraApps
+                .Concat(_privacy.MicrophoneApps)
+                .Where(a => !string.IsNullOrWhiteSpace(a))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(a => a, StringComparer.OrdinalIgnoreCase)
+                .Take(4)
+                .ToArray();
+        }
+    }
+    /// <summary>Compact one-liner for the expanded card, e.g. "Chrome" or "Chrome • Teams".</summary>
+    public string PrivacySourceText => HasPrivacySource
+        ? string.Join(" • ", PrivacySourceNames)
+        : string.Empty;
+    /// <summary>Sensor-grouped detail for tooltips / screen readers.</summary>
+    public string PrivacyDetailText
+    {
+        get
+        {
+            if (!ShowPrivacyInUse) return PrivacyActivityText;
+            var parts = new List<string>();
+            if (ShowCameraInUse) parts.Add("Camera: " + FormatAppList(_privacy.CameraApps));
+            if (ShowMicInUse) parts.Add("Microphone: " + FormatAppList(_privacy.MicrophoneApps));
+            var sources = string.Join("  •  ", parts);
+            return $"{PrivacyActivityText} — {sources}";
+        }
+    }
+    private static string FormatAppList(IReadOnlyList<string> apps)
+    {
+        if (apps.Count == 0) return "Unknown app";
+        var shown = apps.Take(3);
+        var text = string.Join(", ", shown);
+        if (apps.Count > 3) text += $" +{apps.Count - 3} more";
+        return text;
+    }
     public string PrivacyActivityGlyph => ShowCameraInUse
         ? char.ConvertFromUtf32(0xE714)
         : char.ConvertFromUtf32(0xE720);
@@ -696,7 +738,7 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
             if (ShowBatteryTime) width += 150d;
             if (ShowWorldClocks) width += WorldClocks.Count * 140d;
             if (ShowStocks) width += Stocks.Count * 140d;
-            if (ShowConnectivity) width += 280d;
+            if (ShowConnectivity) width += 140d;
             return Math.Min(332d, width);
         }
     }
@@ -713,7 +755,7 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         (ShowBatteryTime ? 1 : 0) +
         (ShowWorldClocks ? WorldClocks.Count : 0) +
         (ShowStocks ? Stocks.Count : 0) +
-        (ShowConnectivity ? 2 : 0);
+        (ShowConnectivity ? 1 : 0);
     private double ExpandedLiveWidgetCardWidth => LiveWidgetCount == 0
         ? 0d
         : Math.Max(132d, (AccessoryLaneWidth - (LiveWidgetCount * 8d)) / LiveWidgetCount);
@@ -1399,6 +1441,8 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         if (changed && ShowPrivacyInUse) _privacySeq++;
         RaiseMany(nameof(ShowCameraInUse), nameof(ShowMicInUse), nameof(ShowPrivacyInUse),
             nameof(PrivacyActivityText), nameof(PrivacyActivityGlyph), nameof(PrivacyIndicatorBrush), nameof(PrivacySeq),
+            nameof(PrivacyCameraApps), nameof(PrivacyMicApps), nameof(PrivacySourceNames),
+            nameof(PrivacySourceText), nameof(PrivacyDetailText), nameof(HasPrivacySource),
             nameof(ShowStatusExtras), nameof(ShowWidgetsPanel));
     });
 
@@ -1623,7 +1667,8 @@ public sealed class IslandViewModel : ObservableObject, IDisposable
         RaiseFocusModeProperties();
         RaiseMany(nameof(ShowClock), nameof(ShowDate), nameof(ShowTimerAlarm), nameof(DebugOverlay), nameof(IsReducedMotion),
             nameof(ShowCameraInUse), nameof(ShowMicInUse), nameof(ShowPrivacyInUse), nameof(PrivacyActivityText), nameof(PrivacyActivityGlyph),
-            nameof(PrivacyIndicatorBrush),
+            nameof(PrivacyIndicatorBrush), nameof(PrivacySourceText), nameof(PrivacyDetailText), nameof(HasPrivacySource),
+            nameof(PrivacyCameraApps), nameof(PrivacyMicApps), nameof(PrivacySourceNames),
             nameof(ShowWeather), nameof(WeatherGlyph), nameof(WeatherTempText), nameof(WeatherDescText), nameof(WeatherCityText),
             nameof(ShowSystemMonitor), nameof(ShowCompactRam), nameof(CpuText), nameof(RamText), nameof(NetText),
             nameof(RamPercentValue), nameof(NetSparkline), nameof(ShowCountdown), nameof(CountdownText),
