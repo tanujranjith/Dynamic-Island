@@ -36,9 +36,11 @@ internal static class UpgradeVerification
         using var theme = new ThemeService(); using var weather = new WeatherService(log); using var monitor = new SystemMonitorService();
         using var spectrum = new AudioSpectrumService(log); using var stocks = new StocksService(log); using var calendar = new CalendarService(log);
         using var notifications = new NotificationListenerService(log); using var privacy = new PrivacySensorService(log);
-        var fixtures = new[] { "openai", "gemini", "anthropic", "codex", "ollama" }.Select(id => new ProviderFixture(id)).ToArray();
+        var qFixture = new ProviderFixture("fixture", holdAfterFirstChunk: true);
+        var fixtures = new[] { "openai", "gemini", "anthropic", "codex", "ollama" }
+            .Select(id => new ProviderFixture(id)).Append(qFixture).ToArray();
         if (providersOnly) settings.QSelectedModel = "openai-default";
-        var registry = new QProviderRegistry(providersOnly ? fixtures : []);
+        var registry = new QProviderRegistry(fixtures);
         IQSecretStore secrets = providersOnly ? new DpapiSecretStore(log) : new FakeSecrets();
         var history = new NotificationHistoryService(log); using var q = new QSessionController(registry);
         var screen = new ScreenContextService(log);
@@ -130,7 +132,7 @@ internal static class UpgradeVerification
         vm.IsExpanded = false; window.UpdateLayout();
         await Task.Delay(90); window.UpdateLayout();
         Check(expandedContent.Visibility == Visibility.Visible && expandedContent.Opacity > 0.1,
-            "Collapse keeps the expanded surface mounted during the shrink");
+            $"Collapse keeps the expanded surface mounted during the shrink (visibility={expandedContent.Visibility}, opacity={expandedContent.Opacity:0.00}, expanded={vm.IsExpanded}, q={vm.ShowQSurface}, width={shell.ActualWidth:0.0})");
         Check(viewport.Visibility == Visibility.Visible && shell.ActualWidth > settings.IslandWidth,
             "Collapse uses the expanded layout bounds until the morph completes");
         await Task.Delay(360); window.UpdateLayout();
@@ -157,16 +159,19 @@ internal static class UpgradeVerification
         var alarmPanel = (AlarmListPanel)((Grid)window.FindName("AlarmTabContent")).Children[0];
         ((ScrollViewer)alarmPanel.FindName("EditorScroller")).ScrollToEnd(); await Capture("alarms-scrolled");
         window.CloseTimerPanel();
-        await q.BeginAsync(QMode.Ask, "fixture", "fixture", null);
-        var streaming = new QSessionSnapshot(QRunState.Streaming, QMode.Ask, "Fixture question", "First response chunk", "Responding…", null, null, "fixture", "fixture");
-        Invoke("OnQChanged", streaming);
+        await q.BeginAsync(QMode.Ask, "fixture", "fixture-default", null);
+        var qSubmission = q.SubmitAsync("Fixture question", QMode.Ask, "fixture", "fixture-default", null, null, false);
+        await qFixture.FirstChunkSent.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         vm.IsExpanded = true; window.ApplySettings();
         var prompt = (System.Windows.Controls.TextBox)window.FindName("QPromptBox"); prompt.Text = "Keep this unfinished question";
         var alarm = timers.State.Alarms[0]; alarm.Phase = AlarmPhase.Ringing; alarm.RingStartedAt = DateTimeOffset.Now;
         timers.SelectAlarm(alarm.Id);
         Check(vm.ShowQSurface && vm.HasUrgentAlert, "Q stays open while an alarm rings");
         Check(prompt.Text == "Keep this unfinished question", "Q draft survives alarm arrival");
-        Invoke("OnQChanged", streaming with { Response = "First response chunk, followed by another chunk" });
+        qFixture.ContinueAfterFirstChunk.TrySetResult(true);
+        await qSubmission;
+        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         Check(vm.QResponse.EndsWith("another chunk") && vm.ShowQSurface, "Q response continues updating while an alarm is visible");
         await Capture("q-with-alert"); vm.DismissUrgentCommand.Execute(null); q.Clear();
         vm.InteractionProtected = true;
@@ -469,8 +474,10 @@ internal static class UpgradeVerification
         check(vm.QSingleMode && vm.QResponse == "Halve the search each step.", "Single-provider mode still works after comparison");
     }
 
-    private sealed class ProviderFixture(string id) : IQProvider
+    private sealed class ProviderFixture(string id, bool holdAfterFirstChunk = false) : IQProvider
     {
+        public TaskCompletionSource<bool> FirstChunkSent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> ContinueAfterFirstChunk { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public QProviderInfo Info { get; } = new(id, id, QProviderCapabilities.Text | QProviderCapabilities.Streaming, id + "-default");
         public string? LastCredential { get; private set; }
         public string? LastModel { get; private set; }
@@ -481,8 +488,18 @@ internal static class UpgradeVerification
         {
             LastCredential = credential; LastModel = request.Model;
             yield return new QStreamEvent.Started();
-            await Task.Yield();
-            yield return new QStreamEvent.Text(id == "gemini" ? "Halve the search each step." : id == "openai" ? "Check the middle, then repeat." : "Local fixture response — no network request.");
+            if (holdAfterFirstChunk)
+            {
+                yield return new QStreamEvent.Text("First response chunk");
+                FirstChunkSent.TrySetResult(true);
+                await ContinueAfterFirstChunk.Task.WaitAsync(cancellationToken);
+                yield return new QStreamEvent.Text(", followed by another chunk");
+            }
+            else
+            {
+                await Task.Yield();
+                yield return new QStreamEvent.Text(id == "gemini" ? "Halve the search each step." : id == "openai" ? "Check the middle, then repeat." : "Local fixture response — no network request.");
+            }
             yield return new QStreamEvent.Completed();
         }
     }

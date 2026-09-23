@@ -7,7 +7,7 @@
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </UserControl.Resources>
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
+    <ScrollViewer x:Name="EditorScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
         <Border Margin="4,0" Background="#221A3152" BorderBrush="#332F4C70" BorderThickness="1" CornerRadius="18" Padding="28,24">
             <StackPanel>
                 <TextBlock Text="{Binding StorageWarning}" Foreground="#FFFFB86C" TextWrapping="Wrap" Margin="0,0,0,6" />

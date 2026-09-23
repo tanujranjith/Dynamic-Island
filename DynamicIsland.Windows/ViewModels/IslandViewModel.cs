@@ -776,7 +776,8 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
     {
         if (!double.IsFinite(width) || width <= 0 || Math.Abs(_accessoryLaneWidth - width) < 1) return;
         _accessoryLaneWidth = width; RaiseLiveWidgetLayoutProperties();
-    }    private int LiveWidgetCount =>
+    }
+    private int LiveWidgetCount =>
         (ShowWeather ? 1 : 0) +
         (ShowCountdown ? 1 : 0) +
         (ShowNextMeeting ? 1 : 0) +
@@ -784,7 +785,10 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         (ShowWorldClocks ? WorldClocks.Count : 0) +
         (ShowStocks ? Stocks.Count : 0) +
         (ShowConnectivity ? 1 : 0);
-    private double GetLiveWidgetCardWidth(double minimum) => ShowAirPodsCard ? minimum : WindowSizingPolicy.WidgetWidth(LiveWidgetRailWidth, LiveWidgetCount, minimum);    public double WeatherWidgetWidth => GetLiveWidgetCardWidth(180d);
+    private double GetLiveWidgetCardWidth(double minimum) => ShowAirPodsCard
+        ? minimum
+        : WindowSizingPolicy.WidgetWidth(LiveWidgetRailWidth, LiveWidgetCount, minimum);
+    public double WeatherWidgetWidth => GetLiveWidgetCardWidth(180d);
     public double CountdownWidgetWidth => GetLiveWidgetCardWidth(136d);
     public double MeetingWidgetWidth => GetLiveWidgetCardWidth(190d);
     public double BatteryTimeWidgetWidth => GetLiveWidgetCardWidth(142d);

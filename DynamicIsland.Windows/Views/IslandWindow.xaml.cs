@@ -981,15 +981,15 @@ public partial class IslandWindow : Window
             // Reveal the compact island only near the end of the shrink. Showing it at the
             // beginning makes the timer panel look like it turns into a large normal island
             // before performing a second resize.
-            var fadeDuration = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.3);
+            var fadeDuration = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.4);
             var expandedFade = new DoubleAnimation(0d, fadeDuration)
             {
-                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.2),
+                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.4),
                 EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
             };
             var compactFade = new DoubleAnimation(1d, fadeDuration)
             {
-                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.7),
+                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.6),
                 EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
             };
             expandedContent.BeginAnimation(UIElement.OpacityProperty, expandedFade);

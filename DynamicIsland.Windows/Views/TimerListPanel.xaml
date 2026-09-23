@@ -7,7 +7,7 @@
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </UserControl.Resources>
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
+    <ScrollViewer x:Name="EditorScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
         <Grid Margin="4,0">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
