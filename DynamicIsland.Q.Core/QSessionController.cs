@@ -4,6 +4,7 @@ public sealed class QSessionController(IQProviderRegistry providers) : IQSession
 {
     private readonly object _gate = new();
     private CancellationTokenSource? _activeCts;
+    private long _generation;
     private readonly List<QMessage> _history = [];
     private QSessionSnapshot _snapshot = new(QRunState.Idle, QMode.Ask, string.Empty, string.Empty, "Ready", null, null, "", "");
 
@@ -12,6 +13,7 @@ public sealed class QSessionController(IQProviderRegistry providers) : IQSession
 
     public Task BeginAsync(QMode mode, string providerId, string model, QScreenContext? context, CancellationToken cancellationToken = default)
     {
+        Cancel();
         Publish(_snapshot with
         {
             State = QRunState.Ready,
@@ -35,7 +37,13 @@ public sealed class QSessionController(IQProviderRegistry providers) : IQSession
         if (string.IsNullOrWhiteSpace(prompt)) return;
         Cancel();
         var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        lock (_gate) _activeCts = linked;
+        long generation;
+        lock (_gate) { _activeCts = linked; generation = ++_generation; }
+        void Emit(QSessionSnapshot value)
+        {
+            lock (_gate) { if (generation != _generation) return; _snapshot = value; }
+            Changed?.Invoke(value);
+        }
         var token = linked.Token;
         try
         {
@@ -45,12 +53,15 @@ public sealed class QSessionController(IQProviderRegistry providers) : IQSession
             var context = Snapshot.Context;
             if (recapture is not null)
             {
-                Publish(Snapshot with { State = QRunState.Capturing, Prompt = prompt, Mode = mode, Error = null, Response = string.Empty, ProviderId = providerId, Model = model, Status = "Reading active window…" });
+                Emit(Snapshot with { State = QRunState.Capturing, Prompt = prompt, Mode = mode, Error = null, Response = string.Empty, ProviderId = providerId, Model = model, Status = "Reading active window…" });
                 context = await recapture(token).ConfigureAwait(false);
             }
 
-            Publish(Snapshot with { State = QRunState.Thinking, Prompt = prompt, Mode = mode, Context = context, Response = string.Empty, Error = null, ProviderId = providerId, Model = model, Status = "Thinking…" });
-            var request = new QRequest(mode, prompt, context, _history.ToArray(), model,
+            token.ThrowIfCancellationRequested();
+            Emit(Snapshot with { State = QRunState.Thinking, Prompt = prompt, Mode = mode, Context = context, Response = string.Empty, Error = null, ProviderId = providerId, Model = model, Status = "Thinking…" });
+            QMessage[] history;
+            lock (_gate) history = _history.ToArray();
+            var request = new QRequest(mode, prompt, context, history, model,
                 includeImage && context?.HasImage == true && provider.Info.Capabilities.HasFlag(QProviderCapabilities.Images),
                 Math.Clamp(maxResponseTokens, 2048, 32768), customSystemPrompt, reasoningEffort);
             var response = new System.Text.StringBuilder();
@@ -60,11 +71,11 @@ public sealed class QSessionController(IQProviderRegistry providers) : IQSession
                 switch (item)
                 {
                     case QStreamEvent.Started:
-                        Publish(Snapshot with { State = QRunState.Streaming, Status = "Q is responding…" });
+                        Emit(Snapshot with { State = QRunState.Streaming, Status = "Q is responding…" });
                         break;
                     case QStreamEvent.Text text:
                         response.Append(text.Value);
-                        Publish(Snapshot with { State = QRunState.Streaming, Response = response.ToString(), Status = "Q is responding…" });
+                        Emit(Snapshot with { State = QRunState.Streaming, Response = response.ToString(), Status = "Q is responding…" });
                         break;
                     case QStreamEvent.Failed failed:
                         throw failed.Exception ?? new InvalidOperationException(failed.Message);
@@ -77,35 +88,50 @@ public sealed class QSessionController(IQProviderRegistry providers) : IQSession
             if (answer.Length == 0)
                 throw new InvalidOperationException("The provider returned an empty response. Retry the question or switch models.");
 
-            _history.Add(new QMessage("user", prompt));
-            _history.Add(new QMessage("assistant", answer));
-            while (_history.Count > 8) _history.RemoveAt(0);
-            Publish(Snapshot with { State = QRunState.Complete, Response = answer, Status = "Complete", Error = null });
+            lock (_gate)
+            {
+                if (generation != _generation) return;
+                _history.Add(new QMessage("user", prompt));
+                _history.Add(new QMessage("assistant", answer));
+                while (_history.Count > 8) _history.RemoveAt(0);
+            }
+            Emit(Snapshot with { State = QRunState.Complete, Response = answer, Status = "Complete", Error = null });
         }
         catch (OperationCanceledException)
         {
-            Publish(Snapshot with { State = QRunState.Cancelled, Status = "Cancelled" });
+            Emit(Snapshot with { State = QRunState.Cancelled, Status = "Cancelled" });
         }
         catch (Exception ex)
         {
-            Publish(Snapshot with { State = QRunState.Error, Status = "Q could not respond", Error = ex.Message });
+            Emit(Snapshot with { State = QRunState.Error, Status = "Q could not respond", Error = ex.Message });
         }
         finally
         {
-            linked.Dispose();
             lock (_gate) if (ReferenceEquals(_activeCts, linked)) _activeCts = null;
+            linked.Dispose();
         }
     }
 
     public void Cancel()
     {
-        lock (_gate) _activeCts?.Cancel();
+        QSessionSnapshot? cancelled = null;
+        lock (_gate)
+        {
+            ++_generation;
+            if (_activeCts is { } active)
+            {
+                _activeCts = null;
+                active.Cancel();
+                _snapshot = cancelled = _snapshot with { State = QRunState.Cancelled, Status = "Cancelled" };
+            }
+        }
+        if (cancelled is not null) Changed?.Invoke(cancelled);
     }
 
     public void Clear()
     {
         Cancel();
-        _history.Clear();
+        lock (_gate) _history.Clear();
         Publish(new QSessionSnapshot(QRunState.Idle, QMode.Ask, string.Empty, string.Empty, "Ready", null, null, "", ""));
     }
 

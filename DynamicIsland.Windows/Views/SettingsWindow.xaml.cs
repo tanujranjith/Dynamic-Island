@@ -21,6 +21,9 @@ public partial class SettingsWindow : Window
         InitializeComponent();
         _islandViewModel = islandViewModel;
         DataContext = settingsViewModel;
+        settingsViewModel.PropertyChanged += SettingsOnPropertyChanged;
+        Closed += (_, _) => settingsViewModel.PropertyChanged -= SettingsOnPropertyChanged;
+        IsVisibleChanged += (_, _) => { if (!IsVisible) QApiKeyBox.Clear(); };
         PreviewIslandData.DataContext = islandViewModel;
         _islandViewModel.PropertyChanged += IslandPreviewOnPropertyChanged;
         Closed += (_, _) => _islandViewModel.PropertyChanged -= IslandPreviewOnPropertyChanged;
@@ -106,10 +109,39 @@ public partial class SettingsWindow : Window
 
     private void OpenTimer_Click(object sender, RoutedEventArgs e) => OpenTimerRequested?.Invoke(this, EventArgs.Empty);
 
-    private void QApiKey_Changed(object sender, RoutedEventArgs e)
+    private void SettingsOnPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (sender is PasswordBox box && DataContext is SettingsViewModel settings)
-            settings.QApiKey = box.Password;
+        // Never carry an unsaved credential into another provider's editor.
+        if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName == nameof(SettingsViewModel.QSelectedProvider)) QApiKeyBox.Clear();
+    }
+
+    private async void CustomThemeColor_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not SettingsViewModel settings) return;
+        var picker = new ThemeColorPickerWindow(settings.CustomThemeColorHex) { Owner = this };
+        if (picker.ShowDialog() != true) return;
+        settings.CustomThemeColorHex = picker.SelectedColorHex;
+        await settings.SaveAsync();
+    }
+
+    private void SaveQApiKey_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not SettingsViewModel settings || string.IsNullOrWhiteSpace(QApiKeyBox.Password)) return;
+        settings.QApiKey = QApiKeyBox.Password;
+        QApiKeyBox.Clear();
+    }
+
+    private void RemoveQApiKey_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not SettingsViewModel settings) return;
+        settings.QApiKey = "";
+        QApiKeyBox.Clear();
+    }
+
+    public void OpenQSettings()
+    {
+        if (DataContext is SettingsViewModel settings) settings.SelectedSectionKey = "q";
+        ShowSection("q");
     }
 
     // Use an explicit click handler so Done always waits for the settings file to be written before

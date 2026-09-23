@@ -44,11 +44,24 @@ public sealed partial class TimerAlarmViewModel : ObservableObject, IDisposable
         });
         ResetTimerCommand = new RelayCommand(_service.ResetTimer);
         CancelTimerCommand = new RelayCommand(_service.CancelTimer);
+        EndTimerCommand = new RelayCommand<Guid>(id => { if (id != Guid.Empty) _service.CancelTimer(id); });
         SetAlarmCommand = new RelayCommand(SetAlarm);
         DeleteAlarmCommand = new RelayCommand(_service.DeleteAlarm);
         DismissAlarmCommand = new RelayCommand(_service.DismissAlarm);
         Snooze5Command = new RelayCommand(() => _service.SnoozeAlarm(5));
         Snooze10Command = new RelayCommand(() => _service.SnoozeAlarm(10));
+        UseTimerLabelForAlarmCommand = new RelayCommand(() =>
+        {
+            if (string.IsNullOrWhiteSpace(TimerLabel))
+            {
+                ValidationMessage = "Enter a timer label first.";
+                return;
+            }
+
+            AlarmLabel = TimerLabel.Trim();
+            ValidationMessage = "Label sent to Alarm tab — review schedule and save.";
+            ShowAlarmTabRequested?.Invoke(this, EventArgs.Empty);
+        });
         _swTimer.Tick += (_, _) => RaisePropertyChanged(nameof(StopwatchText));
         StopwatchPrimaryCommand = new RelayCommand(() =>
         {
@@ -102,6 +115,8 @@ public sealed partial class TimerAlarmViewModel : ObservableObject, IDisposable
     public AlarmRepeat AlarmRepeat { get => _alarmRepeat; set => SetProperty(ref _alarmRepeat, value); }
     public string TimerRemaining => TimerAlarmService.FormatDuration(_service.TimerRemaining);
     public double TimerProgress => _service.TimerProgress * 100;
+    public double TimerRemainingProgress => Math.Clamp(100d - TimerProgress, 0d, 100d);
+    public double TimerRingPerimeterUnits => 2d * Math.PI * 157d / 8d;
     public string TimerStateText => _service.State.Timer.Phase.ToString();
     public bool IsTimerControllable => _service.State.Timer.Phase is TimerPhase.Running or TimerPhase.Paused;
     public bool ShowLiveTimer => _service.State.Timer.Phase is TimerPhase.Running or TimerPhase.Paused;
@@ -150,11 +165,15 @@ public sealed partial class TimerAlarmViewModel : ObservableObject, IDisposable
     public ICommand TimerPrimaryCommand { get; }
     public ICommand ResetTimerCommand { get; }
     public ICommand CancelTimerCommand { get; }
+    public ICommand EndTimerCommand { get; }
     public ICommand SetAlarmCommand { get; }
     public ICommand DeleteAlarmCommand { get; }
     public ICommand DismissAlarmCommand { get; }
     public ICommand Snooze5Command { get; }
     public ICommand Snooze10Command { get; }
+    public ICommand UseTimerLabelForAlarmCommand { get; }
+
+    public event EventHandler? ShowAlarmTabRequested;
 
     private void SetAlarm()
     {
@@ -181,6 +200,7 @@ public sealed partial class TimerAlarmViewModel : ObservableObject, IDisposable
         RefreshCollections();
         RaisePropertyChanged(nameof(TimerRemaining));
         RaisePropertyChanged(nameof(TimerProgress));
+        RaisePropertyChanged(nameof(TimerRemainingProgress));
         RaisePropertyChanged(nameof(TimerStateText));
         RaisePropertyChanged(nameof(IsTimerControllable));
         RaisePropertyChanged(nameof(ShowLiveTimer));

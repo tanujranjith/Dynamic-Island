@@ -1,0 +1,57 @@
+<UserControl x:Class="DynamicIsland.Windows.Views.QComparisonView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             FontFamily="Segoe UI Variable Text" Foreground="{DynamicResource QText}">
+    <ScrollViewer x:Name="ComparisonScroller" VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled">
+    <Grid x:Name="ComparisonLayout">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+        <Border Background="{DynamicResource QCard}" BorderBrush="{DynamicResource QBorder}" BorderThickness="1" CornerRadius="16" Padding="18,12" Margin="0,0,0,16">
+            <StackPanel><TextBlock Text="SAME QUESTION · TWO PROVIDERS" Foreground="{DynamicResource QMuted}" FontSize="11" />
+                <TextBlock Text="{Binding QPromptDisplay}" FontSize="16" TextWrapping="Wrap" MaxHeight="64" TextTrimming="CharacterEllipsis" Margin="0,6,0,0" />
+            </StackPanel>
+        </Border>
+        <Grid Grid.Row="1" x:Name="AnswerColumns">
+            <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="0" /></Grid.RowDefinitions>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="18" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <Border x:Name="LeftCard" Background="{DynamicResource QCard}" BorderBrush="{DynamicResource QBorder}" BorderThickness="1" CornerRadius="18" Padding="16">
+                <Grid><Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <StackPanel Margin="0,0,0,12">
+                        <WrapPanel IsEnabled="{Binding QCanChangeProvider}">
+                            <ComboBox Width="142" Height="36" Margin="0,0,8,6" Style="{DynamicResource QSelectorComboBox}" ItemsSource="{Binding QProviderOptions}" SelectedValuePath="Id" SelectedValue="{Binding QSelectedProvider, Mode=TwoWay}" AutomationProperties.Name="First comparison provider" />
+                            <ComboBox Width="154" Height="36" Margin="0,0,8,6" Style="{DynamicResource QSelectorComboBox}" ItemsSource="{Binding QModelOptions}" SelectedItem="{Binding QSelectedModel, Mode=TwoWay}" ToolTip="First model" />
+                            <ComboBox Width="86" Height="36" Margin="0,0,0,6" Style="{DynamicResource QSelectorComboBox}" ItemsSource="{Binding QReasoningEffortOptions}" SelectedItem="{Binding QReasoningEffort, Mode=TwoWay}" ToolTip="First provider reasoning effort" />
+                        </WrapPanel>
+                        <TextBlock Text="{Binding QLeftStatus}" Foreground="{DynamicResource QAccent}" FontSize="12" />
+                    </StackPanel>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,10,0">
+                        <TextBlock x:Name="LeftResponse" Text="{Binding QLeftAnswer}" FontSize="15.5" LineHeight="23" TextWrapping="Wrap" />
+                    </ScrollViewer>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+                        <Button Content="Copy" Click="LeftCopy_Click" IsEnabled="{Binding QLeftCanCopy}" Style="{DynamicResource QResponseActionButton}" Margin="0,0,8,0" />
+                        <Button Content="Retry" Click="LeftRetry_Click" IsEnabled="{Binding QCompareCanRetry}" Style="{DynamicResource QResponseActionButton}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+            <Border x:Name="RightCard" Grid.Column="2" Background="{DynamicResource QCard}" BorderBrush="{DynamicResource QBorder}" BorderThickness="1" CornerRadius="18" Padding="16">
+                <Grid><Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <StackPanel Margin="0,0,0,12">
+                        <WrapPanel IsEnabled="{Binding QCanChangeProvider}">
+                            <ComboBox x:Name="SecondProvider" Width="142" Height="36" Margin="0,0,8,6" Style="{DynamicResource QSelectorComboBox}" ItemsSource="{Binding QCompareProviderOptions}" SelectedValuePath="Id" SelectedItem="{Binding QCompareProviderChoice, Mode=TwoWay}" AutomationProperties.Name="Second comparison provider" />
+                            <ComboBox x:Name="SecondModel" Width="154" Height="36" Margin="0,0,8,6" Style="{DynamicResource QSelectorComboBox}" ItemsSource="{Binding QCompareModelOptions}" SelectedItem="{Binding QCompareModel, Mode=TwoWay}" ToolTip="Second model" />
+                            <ComboBox Width="86" Height="36" Margin="0,0,0,6" Style="{DynamicResource QSelectorComboBox}" ItemsSource="{Binding QCompareEffortOptions}" SelectedItem="{Binding QCompareEffort, Mode=TwoWay}" ToolTip="Second provider reasoning effort" />
+                        </WrapPanel>
+                        <TextBlock Text="{Binding QRightStatus}" Foreground="{DynamicResource QAccent}" FontSize="12" />
+                    </StackPanel>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,10,0">
+                        <TextBlock x:Name="RightResponse" Text="{Binding QRightAnswer}" FontSize="15.5" LineHeight="23" TextWrapping="Wrap" />
+                    </ScrollViewer>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+                        <Button Content="Copy" Click="RightCopy_Click" IsEnabled="{Binding QRightCanCopy}" Style="{DynamicResource QResponseActionButton}" Margin="0,0,8,0" />
+                        <Button Content="Retry" Click="RightRetry_Click" IsEnabled="{Binding QCompareCanRetry}" Style="{DynamicResource QResponseActionButton}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+    </ScrollViewer>
+</UserControl>

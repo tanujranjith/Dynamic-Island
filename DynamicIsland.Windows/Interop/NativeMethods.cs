@@ -15,6 +15,7 @@ internal static class NativeMethods
     public const int WmHotKey = 0x0312;
     public const uint HotkeyModifierAlt = 0x0001;
     public const uint HotkeyModifierControl = 0x0002;
+    public const uint HotkeyModifierShift = 0x0004;
     public static readonly nint HwndTopmost = new(-1); // HWND_TOPMOST
     public static readonly nint HwndNoTopmost = new(-2); // HWND_NOTOPMOST
     public const int DwmwaWindowCornerPreference = 33;
@@ -36,6 +37,10 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetWindowRect(nint hWnd, out Rect rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetCursorPos(out Point point);
 
     [DllImport("user32.dll")]
     public static extern uint GetDpiForWindow(nint hWnd);
@@ -165,6 +170,13 @@ internal static class NativeMethods
         public int Bottom;
         public int Width => Right - Left;
         public int Height => Bottom - Top;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Point
+    {
+        public int X;
+        public int Y;
     }
 
     [StructLayout(LayoutKind.Sequential)]

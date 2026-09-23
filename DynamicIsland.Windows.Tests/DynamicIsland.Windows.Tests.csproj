@@ -15,6 +15,11 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\DynamicIsland.Windows\Infrastructure\SeekMath.cs" Link="SeekMath.cs" />
+    <Compile Include="..\DynamicIsland.Windows\Infrastructure\ThemePalette.cs" Link="ThemePalette.cs" />
+    <Compile Include="..\DynamicIsland.Windows\Infrastructure\IslandPlacement.cs" Link="IslandPlacement.cs" />
+    <Compile Include="..\DynamicIsland.Windows\Infrastructure\QSequenceMatcher.cs" Link="QSequenceMatcher.cs" />
+    <Compile Include="..\DynamicIsland.Windows\Models\QActivationShortcuts.cs" Link="QActivationShortcuts.cs" />
+    <Compile Include="..\DynamicIsland.Windows\Models\QProviderPreference.cs" Link="QProviderPreference.cs" />
     <Compile Include="..\DynamicIsland.Windows\Models\TimerAlarmState.cs" Link="TimerAlarmState.cs" />
     <Compile Include="..\DynamicIsland.Windows\Models\RecurrenceRule.cs" Link="RecurrenceRule.cs" />
     <Compile Include="..\DynamicIsland.Windows\Infrastructure\ViewModelNotificationGroups.cs" Link="ViewModelNotificationGroups.cs" />

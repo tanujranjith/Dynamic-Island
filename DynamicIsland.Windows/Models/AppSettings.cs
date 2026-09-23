@@ -1,11 +1,11 @@
 namespace DynamicIsland.Windows.Models;
 
-public enum ThemeMode { System, Light, Dark }
+public enum ThemeMode { System, Light, Dark, Custom }
 public enum NotificationFilter { All, Allowlist, Blocklist }
 public enum IslandSize { Compact, Normal, Large }
 public enum IslandVisualMode { Apple, Stats }
 public enum AnimationIntensity { Reduced, Normal, Expressive }
-public enum PositionMode { TopCenter, TopLeft, TopRight, Manual }
+public enum PositionMode { TopCenter, TopLeft, TopRight, Manual, MiddleLeft, Center, MiddleRight, BottomLeft, BottomCenter, BottomRight }
 public enum QuotePlacement { Off, Compact, Expanded, Both }
 public enum QuoteRotation { Static, EveryExpand, EveryMinute, Every5Minutes, Every15Minutes, Every30Minutes, EveryHour }
 public enum QCaptureMode { ActiveWindow, ActiveMonitor }
@@ -39,6 +39,7 @@ public sealed class AppSettings
     public bool Use24HourClock { get; set; }
     public bool ShowSeconds { get; set; }
     public ThemeMode Theme { get; set; } = ThemeMode.System;
+    public string CustomThemeColorHex { get; set; } = "#241C3C";
     public IslandSize IslandSize { get; set; } = IslandSize.Normal;
     public IslandVisualMode IslandVisualMode { get; set; } = IslandVisualMode.Apple;
     public int IslandCornerRadius { get; set; } = 22; // outer island corner radius in DIP (0–48)
@@ -54,7 +55,8 @@ public sealed class AppSettings
     public bool ShowIslandInScreenshots { get; set; }
     public bool ShowInAltTab { get; set; }
     public int CollapseDelayMilliseconds { get; set; } = 400;
-    public int TopOffset { get; set; } = 2; // gap (DIP) from the top of the screen to the pill
+    public int TopOffset { get; set; } = 2; // vertical offset from the selected anchor (DIP)
+    public int SideOffset { get; set; } // horizontal offset from the selected anchor (DIP)
     public double? ManualLeftPixels { get; set; }
     public double? ManualTopPixels { get; set; }
     public string? ManualMonitorDeviceName { get; set; }
@@ -148,6 +150,11 @@ public sealed class AppSettings
     public int QAutoCloseDelaySeconds { get; set; } = 10;
     public string QSelectedProvider { get; set; } = "openai";
     public string QSelectedModel { get; set; } = "gpt-4o-mini";
+    public Dictionary<string, QProviderPreference> QProviderPreferences { get; set; } = new();
+    public bool QCompareEnabled { get; set; }
+    public string QCompareProvider { get; set; } = "gemini";
+    public string QCompareModel { get; set; } = "";
+    public string QCompareReasoningEffort { get; set; } = "auto";
     public QCaptureMode QCaptureMode { get; set; } = QCaptureMode.ActiveWindow;
     public bool QIncludeScreenImage { get; set; } = true;
     public string QOllamaBaseUrl { get; set; } = "http://localhost:11434";
@@ -156,6 +163,10 @@ public sealed class AppSettings
     public string QReasoningEffort { get; set; } = "auto";
     public string QAskSystemPrompt { get; set; } = "";
     public string QSaySystemPrompt { get; set; } = "";
+    // Global shortcut used to open Q. Ctrl+Alt+Q remains the compatibility default.
+    public string QActivationHotkey { get; set; } = "Ctrl+Alt+Q";
+    // Null migrates the former single choice; zero intentionally disables every shortcut.
+    public QActivationShortcuts? QActivationKeys { get; set; }
     public List<QShortcut> QShortcuts { get; set; } = [];
     // Empty means Ctrl+Alt+Q opens Q without automatically submitting a quick shortcut.
     public string QHotkeyShortcut { get; set; } = "";

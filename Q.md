@@ -1,6 +1,7 @@
 # Q visual assistant
 
-Q is Dynamic Island’s on-demand visual assistant. Press `Ctrl+Alt+Q` from another
+Q is Dynamic Island’s on-demand visual assistant. Press the configured Q
+activation shortcuts (`Ctrl+Alt+Q` by default) from another
 application to capture the current context and ask a question without opening a
 separate chat window. By default, Q expands the Island automatically. Disable
 **Auto-expand island for Q** in **Settings → Q Assistant** if you want Q to stay
@@ -16,7 +17,8 @@ compact when it is invoked.
    extracted from the capture for context.
 5. Choose **Reasoning effort**. **Auto** uses the provider/model default; explicit
    values are sent when supported by the selected model.
-6. Use **Test connection**, then invoke Q with `Ctrl+Alt+Q`.
+6. Use **Test connection**, then invoke Q with the selected **Q activation
+   shortcut**.
 
 In **Settings → Q Assistant**, enable **Auto-close Q after response** if you want
 completed Q sessions to close automatically. **Q auto-close delay** controls the
@@ -69,9 +71,19 @@ API key.
   the composer.
 - Use **Stop**, **Copy**, **Retry**, **New question**, and **Quit Q** as the session
   state allows.
+- Under **Q activation shortcuts**, enable any combination of `Ctrl+Alt+Q`,
+  `Shift+A`, `Shift+comma`, `Shift+period`, and typing lowercase `var`.
+  Changes are saved and apply immediately. Existing single-shortcut selections
+  are preserved; new installations default to Ctrl+Alt+Q only.
+- Type lowercase `v`, `a`, `r` consecutively in the same window within two
+  seconds total. Uppercase or mixed-case input, other keys, and switching windows
+  break the sequence. The typed letters remain in the text field. The listener
+  tracks sequence progress only and does not record typed text.
+- Disable **Enable Q** or uncheck a shortcut to release its keyboard registration.
 - Create one-click prompt buttons under **Quick shortcuts** in Q settings. The
-  `Ctrl+Alt+Q action` setting can optionally run one of those shortcuts after the
-  screen capture completes. Leave it as **None** to open Q without auto-submitting.
+  **Hotkey quick action** setting can optionally run one of those shortcuts after
+  the screen capture completes. Leave it as **None** to open Q without
+  auto-submitting.
 
 ## Providers
 
@@ -95,6 +107,18 @@ current contract instead of assuming that every API is interchangeable:
   with its thinking and reasoning controls; screenshots are sent only to a selected vision model.
 - Ollama uses the native local [`/api/chat`](https://docs.ollama.com/api/chat) and
   `/api/tags` APIs, including NDJSON streaming, `think`, and base64 `images`.
+
+Use the **Inference provider** dropdown in the Q panel to switch providers for your next question. Each provider remembers its model and reasoning effort, including across restarts. Switching is disabled while Q is capturing, listening, or answering.
+
+### Compare two providers
+
+Turn on **Compare** in the Q header, choose a different provider/model in each answer column, and use **Send to both**. Q captures the screen once per prompt and sends the same prompt and enabled screen context to both providers, using their separately saved credentials. Each provider uses its own API billing/account limits. Each answer streams independently; one provider failing does not discard the other answer. Follow-ups keep separate histories, never mixing the other provider's responses. Changing a provider/model resets comparison answers; **New question** clears both histories.
+
+Expanded mode shows two independently scrollable answers with separate **Copy** and **Retry** actions. Small screens stack the answer panels in a scrollable area above the shared composer. **Stop both** cancels both requests. Retry affects only its answer and reuses that question's captured context while honoring the current image-sharing setting.
+
+Collapsed comparison shows `Gemini: answer` and `OAI: answer` (labels follow the selected providers). Long answers are ellipsized; hovering a line shows its full text, and opening the island shows both full answers. Comparison temporarily reserves a wider 480-DIP compact island with two readable rows; turning Compare off restores the ordinary configured size. Compare mode and the second provider/model persist across restarts.
+
+Choose **API keys** in Q (or open Settings → Q Assistant), select a provider, paste its key, and click **Save key**. Repeat for other providers: each keeps its own independently encrypted key. The saved-key summary lists configured providers without revealing credentials. **Remove key** only removes the selected provider's key. An empty input is not a missing-key indicator: saved credentials are never filled back into the editor. Codex uses ChatGPT sign-in and Ollama does not require an API key.
 
 Model lists are refreshed by **Test connection** when a provider exposes discovery.
 The model menu retains a current suggested default as an offline fallback. **Auto**
@@ -134,7 +158,8 @@ inference private from OpenAI.
 ## Troubleshooting
 
 - If Q does not open, confirm **Enable Q** is on and that another application is
-  not reserving `Ctrl+Alt+Q`.
+  not reserving the selected Q activation shortcut. `Shift+A` may also interfere
+  with normal typing, so `Ctrl+Alt+Q` is recommended.
 - If the capture is empty, retry with **Active monitor** or bring the source window
   to the foreground. Protected or minimized windows may not expose pixels.
 - If a provider returns an error, verify the key, model, Ollama URL, and network

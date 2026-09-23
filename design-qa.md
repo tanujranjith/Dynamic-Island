@@ -1,147 +1,65 @@
-# Design QA — privacy Live Activity and compact accessory row
+# Q Compare design verification
 
-## Evidence
+final result: passed
 
-- Source visual truth:
-  - `C:\Users\tanuj.DESKTOP-BOL1R68.000\desktop\dyamic island\.codex-reference\privacy-detached.png`
-  - `C:\Users\tanuj.DESKTOP-BOL1R68.000\desktop\dyamic island\.codex-reference\privacy-text-card-after-first-fix.png`
-  - `C:\Users\tanuj.DESKTOP-BOL1R68.000\desktop\dyamic island\.codex-reference\privacy-dot-compact-confirmed.png`
-  - `C:\Users\tanuj.DESKTOP-BOL1R68.000\desktop\dyamic island\.codex-reference\airpods-widgets-stacked-before-row-fix.png`
-  - `C:\Users\tanuj.DESKTOP-BOL1R68.000\desktop\dyamic island\.codex-reference\expanded-floating-privacy-dot-before-live-activity.png`
-  - `C:\Users\tanuj.DESKTOP-BOL1R68.000\desktop\dyamic island\.codex-reference\countdown-widget-clipped-before-dynamic-rail.png`
-- Source pixels:
-  - Detached privacy screenshot: 742 × 681
-  - First-fix privacy screenshot: 516 × 169
-  - Confirmed compact-dot screenshot: 364 × 165
-  - Stacked accessory-row screenshot: 962 × 209
-  - Expanded floating-dot screenshot: 1276 × 490
-  - Clipped countdown screenshot: 905 × 265
-- Latest implementation screenshot: unavailable after the current rebuild
-- Implementation viewport: native transparent WPF window with a 1200-DIP canvas
-- Density normalization: not possible until a post-fix native capture is available
-- Target state: expanded Apple-style island with camera active
+## Visual targets
 
-## Intended visual behavior
+- Expanded: `C:/Users/tanuj/.codex/generated_images/01a0938f-4117-7060-a2b0-01e27cab1b0a/exec-9a7befd8-7146-4c52-a881-c90f567c14cc.png`
+- Selected collapsed: `C:/Users/tanuj/.codex/generated_images/01a0938f-4117-7060-a2b0-01e27cab1b0a/exec-92b57a49-2544-4c6f-b688-c3bbce45904e.png`
+- Final native implementation: `artifacts/compare-verification-v5/captures/compare-expanded-100.png`, `compare-collapsed-detail.png`, `compare-narrow-100.png`, and `compare-narrow-scrolled-100.png`.
 
-- Compact mode shows only the 8-DIP green/orange recording light inside its 18-DIP trailing orb.
-- Expanded mode replaces the outside orb with a 26-DIP inline Live Activity beneath the top-right controls.
-- The expanded activity contains the semantic sensor dot, the live sensor state, and a short `LIVE` marker.
-- Sensor activation while expanded uses a 260 ms scale/slide and 180 ms fade.
-- AirPods and live widgets remain distinct cards in one 64-DIP horizontal accessory lane.
-- The live-widget rail sizes from visible cards up to 332 DIP, fitting weather and countdown together while preserving AirPods space.
-- A third widget and beyond can be reached with horizontal mouse-wheel scrolling.
+## First inspection
 
-The layout follows Apple's guidance to preserve information between compact and expanded presentations, keep content snug, avoid notification-style layouts, and animate existing live information into its new position.
+- P1: Second provider/model dropdowns went blank when streaming replaced their item sources. Change item-source notifications to run only on configuration changes; add a selected-value regression assertion.
+- P2: Compact clock remained visible next to the two answers. Hide ordinary status in compact comparison mode.
+- P2: Compact presentation lacked the selected mockup's slate outline and blue Q tile. Add comparison-only styling without changing the normal island size settings.
+- P2: Narrow header could overlap the Compare toggle. Trim title text and move nonessential timer/mute controls out of compare mode.
+- Capture-only issue: Directly rendering the transformed shell produced an offset crop. Crop from the full native-window render instead.
 
-## Comparison history
+## Pending validation
 
-### Pass 1 — detached privacy notification
+Rebuild, rerun native assertions, and compare revised expanded and collapsed captures alongside their selected visual targets. Check typography, spacing, colors, existing native icon fidelity, and provider-labeled content. Verify both cards remain reachable by scrolling on a 640 × 480 work area.
 
-- [P1] Privacy notification was detached in the middle of the desktop.
-  - Fix: removed privacy from the generic banner.
+## Second inspection
 
-### Pass 2 — attached text card
+Compared both source mockups and v2 native captures in the same tool input. The compact outline, Q tile, two answer lines, and clock suppression now match the intended structure. The second selectors had valid selected values but their template still rendered blank labels. Replace the cached SelectionBoxItem presenter with a direct SelectedItem text binding. Narrow header status also needs clipping within its own column. Keep blocked pending the final render check.
 
-- [P1] The attached privacy disclosure still read as a large notification.
-  - Evidence: `privacy-text-card-after-first-fix.png`.
-  - Fix: removed the disclosure and reduced compact privacy to a trailing recording orb.
+## Final inspection and evidence
 
-### Pass 3 — compact dot
+The v3 model label rendered, but the second provider remained blank. Stable filtered provider choices and a two-way SelectedItem binding resolved it in v4. The final v5 fixture also changes the second provider through the actual control, confirms the rendered template label, and passes. No deferred UI synchronization workaround was retained.
 
-- User evidence: `privacy-dot-compact-confirmed.png` confirms the compact dot-only treatment.
-- [P1] The orb initially disappeared in expanded mode.
-  - Fix: kept sensor activity visible while moving the orb to the expanded shell edge.
+Compared the expanded reference and final v5 expanded capture in the same image-tool input. Compared the collapsed reference and v3 focused capture together, then inspected the unchanged compact presentation in the final v5 crop. Inspected final narrow and narrow-scrolled captures. Earlier P1/P2 findings are resolved: both selectors display their selected names, both answers are distinct, no compact clock competes with the answers, the compact outline/blue Q tile are present, and narrow header content cannot overlap its controls.
 
-### Pass 4 — accessory-row density
+### Dimensions and state
 
-- [P1] AirPods and weather occupied two stacked full-width rows.
-  - Evidence: `airpods-widgets-stacked-before-row-fix.png`.
-  - Fix: combined them into one row as separate cards and reduced height reservation to one lane.
+- Expanded reference: 1550 × 1015 concept image. Native shell: 1100 × 700 device-independent pixels, captured in a 1200-wide transparent window canvas at 100%; focused shell crop is 2200 × 1400 at 200%.
+- Collapsed reference: 2055 × 765 concept board including exterior padding. Compare the pill region, not that exterior canvas. Native compact shell: 480 × 68 device-independent pixels; final focused crop: 960 × 136 at 200%.
+- Native fixture additionally renders 100%, 150%, and 200% density. Sizes above distinguish physical pixels from WPF layout units; this is a native app, not CSS/browser output.
+- State: dark theme, Compare enabled, one shared binary-search question, Gemini and OpenAI complete. The fixture intentionally uses the short answers from the selected collapsed reference instead of the expanded concept's illustrative paragraphs.
+- Small-screen test: 640 × 480 work area; cards stack inside a scroll region, with the shared composer and essential actions outside that region. Both cards are reachable. Full-view images clearly expose the provider controls; the compact 200% crop supplies focused text/spacing evidence.
 
-### Pass 5 — expanded state confirmation
+### Fidelity review and intentional native-app adaptations
 
-- User evidence: `expanded-floating-privacy-dot-before-live-activity.png`.
-- AirPods and weather are visibly separate, aligned on one row, and not clipped.
-- [P1] The privacy orb remained detached from the expanded content and did not read as a Live Activity.
-  - Fix: made the outside orb compact-only and added a snug inline activity beneath the expanded controls.
+- Typography: existing Segoe UI Variable Text, 15.5px response body and 14px compact copy, readable blue provider labels and white answers. Long compact responses trim to one line with full-answer tooltips. The concept's scaled presentation is not treated as a literal font-size specification.
+- Layout: equal answer cards, shared question, per-answer Copy/Retry and one composer. Existing Ask/Say, quick prompts, API keys, New question, and Quit Q remain available. Compare is a native on/off pill rather than introducing a second Single/Compare segmented component. Compact dimensions expand temporarily without overwriting ordinary island sizing preferences.
+- Colors: existing near-black shell, slate card borders, blue controls/labels and light answer text; no decorative image gradients added.
+- Assets: reuse the existing native Q branding and Segoe Fluent icon set. Provider text names are retained instead of adding the concept's decorative provider logos; no new raster artwork or imitated provider marks are introduced.
+- Content: actual independent provider responses drive each label/answer row. Synthetic provider/model names in fixture captures are test data, not hardcoded production choices. The empty composer correctly disables Send to both. Screen-context disclosure explains both destinations and separate billing/account limits.
 
-### Pass 6 — current implementation
+### Verification
 
-- Release build: succeeded with zero warnings and zero errors.
-- Automated tests: 97 passed, 0 failed, 0 skipped.
-- Root app: republished and relaunched successfully as process 16712.
-- Post-fix visual evidence: pending a same-state expanded screenshot.
+- 151 unit tests pass, including parallel requests, one capture, isolated credentials/history, independent failures, retry, cancellation, and late-event suppression.
+- Final native comparison harness: 26 assertions pass (`artifacts/compare-verification-v5/captures/checks.txt`).
+- Existing provider/key UI regression harness passes (`artifacts/compare-provider-regression-final/captures/checks.txt`).
+- Native comparison binding-warning log is empty. Release single-file publication succeeds.
+- Test gap: verification uses local synthetic provider streams and credentials; no paid live API requests were sent. This is native WPF rendering and control verification, not desktop click automation.
 
-### Pass 7 — countdown overflow
+## Remaining findings / checklist
 
-- [P1] The fixed 230-DIP widget viewport showed weather but clipped the countdown card at the island edge.
-  - Evidence: `countdown-widget-clipped-before-dynamic-rail.png`.
-  - Fix: replaced the fixed width with a content-derived rail capped at 332 DIP, reduced weather to 180 DIP and countdown to 136 DIP, and added horizontal mouse-wheel navigation for additional widgets.
-- Release build: succeeded with zero warnings and zero errors.
-- Automated tests: 97 passed, 0 failed, 0 skipped.
-- Root app: republished and relaunched successfully as process 20344.
-- Post-fix visual evidence: pending a weather-plus-countdown screenshot.
+No actionable P0/P1/P2 findings remain. P3 follow-up: optionally apply the app's dark scrollbar styling to the small-screen comparison scroller. The selected layout has been implemented within the existing native product, not published as a separate web prototype.
 
-### Pass 8 â€” disconnected-AirPods accessory lane
-
-- [P1] When no AirPods card was present, weather and countdown remained confined to the 332-DIP rail, leaving the rest of the 64-DIP accessory lane empty.
-  - Evidence: user-supplied expanded-island screenshot, `codex-clipboard-2QE2Zm.png`.
-  - Fix: the widget rail now occupies the full accessory lane when AirPods are absent. Enabled cards divide that width evenly; when AirPods reconnect, cards return to their compact widths beside the dedicated AirPods card.
-- Release build: succeeded with zero warnings and zero errors.
-- Automated tests: 97 passed, 0 failed, 0 skipped.
-- Root app: republished and relaunched successfully as process 16396.
-- Post-fix visual evidence: pending a screenshot of the same disconnected-AirPods state.
-## Required fidelity surfaces
-
-- Fonts and typography: the inline activity uses the existing Segoe UI Variable hierarchy at 10.5 and 8 DIP with semibold/bold optical contrast; post-fix capture is pending.
-- Spacing and layout rhythm: the activity fits the existing fixed 64-DIP header region and does not add shell height; its final alignment requires capture.
-- Colors and visual tokens: the opaque dark activity surface, subtle keyline, Apple green camera state, and Apple orange microphone state follow existing tokens.
-- Image quality and asset fidelity: no new imagery was required; the confirmed AirPods raster remains sharp and uniformly scaled.
-- Copy and content: compact privacy is text-free; expanded privacy exposes only the sensor state and `LIVE`, without inventing an app identity.
-
-## Findings
-
-- [P1] The rebuilt inline Live Activity has not been captured.
-  - Location: expanded Apple-style header beneath the top-right controls.
-  - Evidence: the pre-fix screenshot shows the detached orb, while the new build and process evidence do not show the revised pixels.
-  - Impact: final pill width, truncation, control clearance, and motion endpoint cannot yet be visually certified.
-  - Fix: capture the expanded camera-active state and compare it directly with the pre-fix expanded screenshot.
-- [P1] The rebuilt dynamic widget rail has not been captured, including the disconnected-AirPods fill state.
-  - Location: expanded AirPods and live-widget accessory lane.
-  - Evidence: the source screenshot shows countdown clipped after weather; code, build, test, and process evidence confirm the fix is running but do not show its pixels.
-  - Impact: final AirPods truncation and full countdown visibility cannot yet be visually certified.
-  - Fix: capture the expanded state with AirPods, weather, and countdown visible.
-
-## Implementation checklist
-
-- Capture the expanded camera-active state.
-- Confirm the outside orb is absent.
-- Confirm the inline activity is snug, legible, and clear of the controls and progress bar.
-- Capture the disconnected-AirPods state with weather and countdown enabled; confirm both cards fill the accessory lane without overflow.
-- Capture AirPods, weather, and countdown together and confirm all three cards remain legible.
-
-final result: blocked
-
-## Core upgrades verification — 2026-09-07
-
-Scope: isolated `codex/island-core-upgrades` worktree, based on `ae5c8af`. The earlier production-capture findings above are retained as historical notes. This pass uses synthetic fixtures in real WPF controls; it does not certify live hardware behavior.
-
-- Release build: zero warnings and errors. Unit tests: 119 passed. Native assertions: 40 passed. Binding diagnostics: empty.
-- Evidence: `artifacts/upgrade-verification/5a841432d9a147fb866395aab184b64b/captures/` contains 42 local PNGs (14 surfaces at three raster scales) and `checks.txt`. These artifacts are excluded from Git.
-- Apple with and without AirPods, Stats, larger text, widget overflow, timers and alarms at the top and bottom of their scroll range, grouped notifications, Q with a ringing alarm, and constrained Apple/timer/Q views were rendered.
-- Two accessory cards fill the 708-DIP lane without false overflow. Additional widgets remain reachable by scrolling. The timer editor has a 304-DIP viewport for 658 DIPs of content; its stopwatch and lower controls are reachable. Alarm recurrence and snooze controls are reachable at the bottom.
-- Q retains its draft and continues rendering response chunks while the attached urgent strip offers snooze and dismiss. The simulated 640-by-480-DIP working area bounds the shell and keeps the composer reachable through scrolling.
-- Legacy timer migration retains an exact backup. Future-version storage is preserved. Notification grouping, dismissal, Focus Mode, history-disabled delivery, and permission placeholders passed native assertions.
-- Raster scaling is not physical mixed-DPI testing. Real AirPods reconnects, Windows permission prompts, audible alerts, suspend/resume, and physical monitor transitions remain device-validation items.
-
-Result: automated and fixture-based validation passed; live-device validation remains as described above. The original checkout and running application were not replaced.
-
-## Expansion scrollbar and layout regression — 2026-09-07
-
-The outer ScrollViewer introduced by the upgrade displayed automatic scrollbars while the shell animated through smaller sizes. It also resized the expanded subtree during the morph. The outer viewport now uses hidden scrollbar chrome and stays at the destination dimensions while the rounded shell reveals its content. Inner timer and transcript scrolling remain available.
-
-Verification: 119 unit tests passed; Release build has zero warnings/errors. Native verification now exercises expressive animation, checks five in-flight samples for stable viewport size and absent outer scrollbars, limits expanded-content resize events, verifies interrupted morph recovery, and checks that the constrained viewport still scrolls. Evidence: `artifacts/upgrade-verification/47b8cf28002641cdb1c88acd2573bb6e/captures/`. This confirms removal of repeated content resizing; it is not a live GPU frame-rate measurement.
-
-The follow-up morph pass moves the shell with a render transform and commits layout dimensions only at the start and end. The same native checks passed after this change, with no per-frame Width/Height animation remaining.
-
-Collapse now keeps the expanded surface mounted while the render transform shrinks, fades the compact surface in during the final portion, and commits the compact layout after the transform completes. Native checks cover the intermediate and settled states.
+- [x] Resolve selected expanded and collapsed concept.
+- [x] Implement independent provider responses and compact labeled lines.
+- [x] Fix visual issues and repeat native captures.
+- [x] Verify controls, persistence, cancellation, narrow-screen access, and single-provider regressions.
+- [x] Inspect final native evidence and record remaining live-API test gap.

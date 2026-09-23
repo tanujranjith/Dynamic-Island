@@ -14,8 +14,17 @@ public sealed class RingProgressConverter : IMultiValueConverter
 {
     public object Convert(object[] values, Type targetType, object? parameter, CultureInfo culture)
     {
-        var progress = Math.Clamp(System.Convert.ToDouble(values[0], culture) / 100.0, 0d, 1d);
-        var units = System.Convert.ToDouble(values[1], culture);
+        if (values.Length < 2 || values[0] == DependencyProperty.UnsetValue || values[1] == DependencyProperty.UnsetValue
+            || values[0] is null || values[1] is null)
+            return new DoubleCollection { 0.0001, 1 };
+        double progress;
+        double units;
+        try
+        {
+            progress = Math.Clamp(System.Convert.ToDouble(values[0], culture) / 100.0, 0d, 1d);
+            units = System.Convert.ToDouble(values[1], culture);
+        }
+        catch (Exception) { return new DoubleCollection { 0.0001, 1 }; }
         if (units <= 0) units = 1;
         var on = Math.Max(0.0001, progress * units);
         var off = Math.Max(0.0001, units - on);

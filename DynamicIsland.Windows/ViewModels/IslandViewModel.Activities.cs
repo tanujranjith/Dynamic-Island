@@ -20,11 +20,13 @@ public sealed partial class IslandViewModel
     }
     public bool DeferOrdinaryBanners => InteractionProtected || TimerEditorOpen || IsQActive || HasUrgentAlert;
     public TimerState? DisplayTimer => _timerAlarmService.DisplayTimer(Settings.PinnedActivity == IslandActivity.Timer ? Settings.PinnedTimerId : null);
+    public string TimerOrbGlyph => DisplayTimer?.Phase == TimerPhase.Paused ? "\uE768" : "\uE916";
+    public string TimerOrbTooltip => DisplayTimer?.Phase == TimerPhase.Paused ? "Paused timer" : "Running timer";
     private TimerState PrimaryTimer => _timerAlarmService.State.Timers.FirstOrDefault(t => t.Phase == TimerPhase.Completed && !t.CompletionAcknowledged) ?? DisplayTimer ?? _timerAlarmService.State.Timer;
     private AlarmState PrimaryAlarm => _timerAlarmService.State.Alarms.FirstOrDefault(a => a.Phase == AlarmPhase.Ringing)
         ?? _timerAlarmService.State.Alarms.Where(a => a.Phase is AlarmPhase.Scheduled or AlarmPhase.Snoozed).OrderBy(a => a.SnoozeUntil ?? a.TargetAt).FirstOrDefault() ?? _timerAlarmService.State.Alarm;
-    public int ActiveTimerCount => _timerAlarmService.State.Timers.Count(t => t.Phase is TimerPhase.Running or TimerPhase.Paused);
-    public string TimerCountText => ActiveTimerCount > 1 ? ActiveTimerCount.ToString() : "";
+    public int RunningTimerCount => _timerAlarmService.State.Timers.Count(t => t.Phase == TimerPhase.Running);
+    public string TimerCountText => RunningTimerCount > 1 ? RunningTimerCount.ToString() : "";
     public bool HasUrgentAlert => _timerAlarmService.State.Alarms.Any(a => a.Phase == AlarmPhase.Ringing) || _timerAlarmService.State.Timers.Any(t => t.Phase == TimerPhase.Completed && !t.CompletionAcknowledged);
     public bool CanSnoozeUrgent => _timerAlarmService.State.Alarms.Any(a => a.Phase == AlarmPhase.Ringing);
     public string UrgentAlertText => string.Join(" · ",
@@ -49,7 +51,7 @@ public sealed partial class IslandViewModel
     {
         if (Settings.PinnedActivity == IslandActivity.Timer && !_timerAlarmService.State.Timers.Any(t => t.Id == Settings.PinnedTimerId))
         { Settings.PinnedActivity = IslandActivity.None; Settings.PinnedTimerId = null; _ = PersistSettingsAsync(); }
-        RaiseMany(nameof(PrimaryActivity), nameof(HasUrgentAlert), nameof(UrgentAlertText), nameof(CanSnoozeUrgent), nameof(TimerCountText), nameof(ActivityPinText),
+        RaiseMany(nameof(PrimaryActivity), nameof(HasUrgentAlert), nameof(UrgentAlertText), nameof(CanSnoozeUrgent), nameof(TimerCountText), nameof(TimerOrbGlyph), nameof(TimerOrbTooltip), nameof(ActivityPinText),
             nameof(ShowBanner), nameof(ShowNotification), nameof(ShowTimerOrb), nameof(TimerText), nameof(TimerRemainingProgress), nameof(CompactPrimaryText), nameof(CompactSecondaryText));
     }
 }

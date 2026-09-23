@@ -19,17 +19,23 @@ public sealed class GlobalHotkeyService(LoggingService log) : IDisposable
         _source?.AddHook(WindowProc);
     }
 
-    public bool Register(string name, uint modifiers, uint key, Action action)
+    public int Register(string name, uint modifiers, uint key, Action action)
     {
-        if (_source is null || Infrastructure.AppDataPaths.IsPreview) return false;
+        if (_source is null || Infrastructure.AppDataPaths.IsPreview) return 0;
         var id = _nextId++;
         if (!NativeMethods.RegisterHotKey(_source.Handle, id, modifiers, key))
         {
             log.Debug($"Global shortcut '{name}' could not be registered.");
-            return false;
+            return 0;
         }
         _actions[id] = action;
-        return true;
+        return id;
+    }
+
+    public bool Unregister(int id)
+    {
+        if (_source is null || id == 0 || !_actions.Remove(id)) return false;
+        return NativeMethods.UnregisterHotKey(_source.Handle, id);
     }
 
     private nint WindowProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)

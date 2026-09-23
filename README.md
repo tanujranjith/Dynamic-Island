@@ -116,7 +116,9 @@ This branch adds activity pinning, queued notifications, adaptive overflow, inte
   ranges such as 90-99% instead of implying an exact value.
 - **Timer & alarm** — presets and custom durations, a *done* state with sound,
   snooze/dismiss, and state that survives a restart.
-- **Q visual assistant** — invoke with `Ctrl+Alt+Q`, capture the active window or
+- **Q visual assistant** — enable multiple shortcuts: `Ctrl+Alt+Q`, `Shift+A`,
+  `Shift+comma`, `Shift+period`, or lowercase `var` typed within two seconds.
+  Capture the active window or
   monitor, extract OCR text, optionally send the captured PNG to a vision-capable
   provider, and stream an answer in the Island. Q supports Ask and Say modes,
   typed follow-ups, Windows dictation, retry/copy/recapture/new-question actions,

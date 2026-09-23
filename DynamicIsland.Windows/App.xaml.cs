@@ -33,6 +33,7 @@ public partial class App : System.Windows.Application
     private NotificationListenerService? _notifications;
     private NotificationHistoryService? _notificationHistory;
     private GlobalHotkeyService? _hotkeys;
+    private QShortcutService? _qShortcuts;
     private PrivacySensorService? _privacy;
     private ClipboardService? _clipboard;
     private WindowPositionService? _position;
@@ -54,11 +55,11 @@ public partial class App : System.Windows.Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        if (e.Args.Contains("--verify-upgrades"))
+        if (e.Args.Contains("--verify-upgrades") || e.Args.Contains("--verify-q-providers") || e.Args.Contains("--verify-q-compare"))
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             if (!Infrastructure.AppDataPaths.IsPreview) { Shutdown(2); return; }
-            try { await Infrastructure.UpgradeVerification.RunAsync(); Shutdown(0); }
+            try { await Infrastructure.UpgradeVerification.RunAsync(e.Args.Contains("--verify-q-providers"), e.Args.Contains("--verify-q-compare")); Shutdown(0); }
             catch (Exception ex) { Directory.CreateDirectory(Infrastructure.AppDataPaths.Root); File.WriteAllText(Path.Combine(Infrastructure.AppDataPaths.Root, "verification-error.txt"), ex.ToString()); Shutdown(1); }
             return;
         }
@@ -67,15 +68,13 @@ public partial class App : System.Windows.Application
         _singleInstance = new Mutex(true, "Local\\DynamicIsland.Windows.SingleInstance" + Infrastructure.AppDataPaths.InstanceSuffix, out var firstInstance);
         if (!firstInstance)
         {
-            if (openSettingsFromCommandLine)
+            // Double-clicking the executable should reveal the running app too.
+            try
             {
-                try
-                {
-                    using var signal = EventWaitHandle.OpenExisting(ShowSettingsSignalName);
-                    signal.Set();
-                }
-                catch (WaitHandleCannotBeOpenedException) { }
+                using var signal = EventWaitHandle.OpenExisting(ShowSettingsSignalName);
+                signal.Set();
             }
+            catch (WaitHandleCannotBeOpenedException) { }
             Shutdown();
             return;
         }
@@ -143,17 +142,19 @@ public partial class App : System.Windows.Application
         _position = new WindowPositionService();
         _islandViewModel = new IslandViewModel(_settings, _media, _audio, _battery, _clock, _timerAlarm, _theme,
             _weather, _sysMon, _spectrum, _stocks, _calendar, _notifications, _privacy, _notificationHistory,
-            _qSession, _qScreen, _qSpeech, _qSecrets, _codexAccount, _airPods, _settingsService);
+            _qSession, _qScreen, _qSpeech, _qSecrets, _codexAccount, _airPods, _settingsService, providers);
         _islandViewModel.AttachClipboard(_clipboard);
         _timerViewModel = new TimerAlarmViewModel(_timerAlarm, _settings.Use24HourClock);
         _islandWindow = new IslandWindow(_islandViewModel, _timerViewModel, _position, _settingsService, _log, _qScreen);
         _islandWindow.OpenSettingsRequested += (_, _) => ShowSettings();
+        _islandWindow.OpenQSettingsRequested += (_, _) => { ShowSettings(); _settingsWindow?.OpenQSettings(); };
         _islandWindow.OpenClipboardRequested += (_, _) => _ = ShowClipboardAsync();
         _islandWindow.RecenterRequested += (_, _) => Recenter();
         _islandWindow.Closed += (_, _) => { if (!_isShuttingDown) ShutdownApplication(); };
 
         _settingsViewModel = new SettingsViewModel(_settings, _settingsService, _startupService,
             ApplySettings, Recenter, () => _settingsWindow?.Hide(), _qSecrets, providers, _codexAccount);
+        _islandViewModel.QProviderSelectionChanged += (_, _) => _settingsViewModel.RefreshQProviderControls();
         _media.AvailableAppsChanged += (_, apps) => Dispatcher.BeginInvoke(() =>
             _settingsViewModel.SetAvailableApps(apps));
 
@@ -176,8 +177,7 @@ public partial class App : System.Windows.Application
             ToggleFocus);
         _hotkeys.Register("Open settings", Interop.NativeMethods.HotkeyModifierControl | Interop.NativeMethods.HotkeyModifierAlt, (uint)'S',
             ShowSettings);
-        _hotkeys.Register("Open Q", Interop.NativeMethods.HotkeyModifierControl | Interop.NativeMethods.HotkeyModifierAlt, (uint)'Q',
-            () => _ = _islandViewModel.StartQAsync(_qScreen.LastForegroundTarget, _settings.QHotkeyShortcut));
+        RegisterQHotkey();
         _clock.Start();
         _battery.Start();
         _audio.Start();
@@ -217,6 +217,8 @@ public partial class App : System.Windows.Application
             };
         }
         _settingsWindow.Show();
+        _settingsViewModel.RefreshQProviderControls();
+        _settingsViewModel.RefreshPositionControls();
         _settingsWindow.Activate();
         FadeIn(_settingsWindow);
     }
@@ -248,11 +250,23 @@ public partial class App : System.Windows.Application
     {
         if (_settings is null) return;
         _log?.SetDebugEnabled(_settings.DebugLogging);
+        RegisterQHotkey();
         ApplyGlobalTheme();
         _islandViewModel?.ApplySettings();
         _islandWindow?.ApplySettings();
         ApplyLiveActivitySettings();
         _tray?.SyncChecks();
+    }
+
+    private void RegisterQHotkey()
+    {
+        if (_hotkeys is null || _settings is null || _islandViewModel is null || _qScreen is null) return;
+        _qShortcuts ??= new QShortcutService(_hotkeys, _log!, Dispatcher,
+            () => _ = _islandViewModel.StartQAsync(_qScreen.LastForegroundTarget, _settings.QHotkeyShortcut));
+        _qShortcuts.Configure(_settings.QEnabled
+            ? QActivationPolicy.Resolve(_settings.QActivationKeys, _settings.QActivationHotkey)
+            : QActivationShortcuts.None);
+        _settingsViewModel?.SetQActivationStatus(_qShortcuts.Status);
     }
 
     private bool _liveSettingsApplied, _clipboardEnabled;
@@ -353,6 +367,7 @@ public partial class App : System.Windows.Application
         if (_islandWindow is null || _position is null || _settings is null) return;
         _islandWindow.ForceShow();
         _position.Recenter(_islandWindow, _settings);
+        _settingsViewModel?.RefreshPositionControls();
         _ = _settingsService?.SaveAsync(_settings);
     }
 
@@ -395,6 +410,7 @@ public partial class App : System.Windows.Application
         _stocks?.Dispose();
         _calendar?.Dispose();
         _notifications?.Dispose();
+        _qShortcuts?.Dispose();
         _hotkeys?.Dispose();
         _showSettingsSignal?.Set();
         _showSettingsSignal?.Dispose();

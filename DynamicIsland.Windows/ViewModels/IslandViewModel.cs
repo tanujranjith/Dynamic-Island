@@ -14,6 +14,7 @@ using DynamicIsland.Windows.Services;
 using DynamicIsland.Windows.Services.Q;
 using DynamicIsland.Q.Core;
 using MediaBrush = System.Windows.Media.Brush;
+using ThemeMode = DynamicIsland.Windows.Models.ThemeMode;
 
 namespace DynamicIsland.Windows.ViewModels;
 
@@ -85,6 +86,7 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
     private readonly IQScreenContextService _qScreen;
     private readonly IQSpeechInputService _qSpeech;
     private readonly Services.Q.IQSecretStore _qSecrets;
+    private readonly IQProviderRegistry _qProviders;
     private readonly CodexAccountCoordinator? _codexAccount;
     private IReadOnlyList<CodexModel> _codexModels = [];
     private QSessionSnapshot _qSnapshot = new(QRunState.Idle, QMode.Ask, string.Empty, string.Empty, "Ready", null, null, "", "");
@@ -98,7 +100,8 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         NotificationListenerService notificationService, PrivacySensorService privacyService,
         NotificationHistoryService notificationHistoryService,
         IQSessionController qSession, IQScreenContextService qScreen, IQSpeechInputService qSpeech,
-        Services.Q.IQSecretStore qSecrets, CodexAccountCoordinator? codexAccount = null, AirPodsService? airPodsService = null, SettingsService? settingsService = null)
+        Services.Q.IQSecretStore qSecrets, CodexAccountCoordinator? codexAccount = null, AirPodsService? airPodsService = null, SettingsService? settingsService = null,
+        IQProviderRegistry? qProviders = null)
     {
         Settings = settings;
         _settingsPersistence = settingsService ?? new SettingsService(new LoggingService());
@@ -120,6 +123,10 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         _qScreen = qScreen;
         _qSpeech = qSpeech;
         _qSecrets = qSecrets;
+        _qProviders = qProviders ?? new QProviderRegistry([]);
+        _qComparison = new QComparisonController(_qProviders);
+        _qComparison.Changed += OnQComparisonChanged;
+        EnsureCompareProvider();
         _codexAccount = codexAccount;
         if (_codexAccount is not null)
         {
@@ -212,7 +219,7 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
     }
 
     public AppSettings Settings { get; }
-    public QRunState QState => _qSnapshot.State;
+    public QRunState QState => QCompareEnabled && _qComparison.Snapshot.State != QRunState.Idle ? _qComparison.Snapshot.State : _qSnapshot.State;
     public QMode QCurrentMode => _qSnapshot.Mode;
     public string QStatusText => _qSnapshot.Status;
     public string QHeaderStatusText => QState switch
@@ -274,7 +281,32 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
     public bool QSpeechAvailable => _qSpeech.IsAvailable;
     public IReadOnlyList<QShortcut> QShortcuts => Settings.QShortcuts ?? [];
     public bool QHasShortcuts => QShortcuts.Count > 0;
-    public string QSelectedProvider => Settings.QSelectedProvider;
+    public IReadOnlyList<QProviderChoice> QProviderOptions => _qProviders.Providers
+        .Select(provider => new QProviderChoice(provider.Info.Id, provider.Info.DisplayName)).ToArray();
+    public bool QCanChangeProvider => !QCanStop;
+    public event EventHandler? QProviderSelectionChanged;
+    public string QSelectedProvider
+    {
+        get => Settings.QSelectedProvider;
+        set
+        {
+            if (!QCanChangeProvider || string.IsNullOrWhiteSpace(value)
+                || string.Equals(Settings.QSelectedProvider, value, StringComparison.OrdinalIgnoreCase)
+                || _qProviders.Find(value) is not { } provider) return;
+            var selected = QProviderSelection.Switch(Settings.QProviderPreferences ??= new(),
+                Settings.QSelectedProvider, Settings.QSelectedModel, Settings.QReasoningEffort,
+                provider.Info.Id, provider.Info.DefaultModel);
+            Settings.QSelectedProvider = provider.Info.Id;
+            Settings.QSelectedModel = selected.Model;
+            Settings.QReasoningEffort = selected.ReasoningEffort;
+            NormalizeProviderReasoningEffort();
+            EnsureCompareProvider();
+            ResetComparisonAnswers();
+            RaiseQProperties();
+            QProviderSelectionChanged?.Invoke(this, EventArgs.Empty);
+            _ = PersistSettingsAsync();
+        }
+    }
     public string QSelectedModel
     {
         get => Settings.QSelectedModel;
@@ -282,6 +314,7 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         {
             if (string.IsNullOrWhiteSpace(value) || string.Equals(Settings.QSelectedModel, value, StringComparison.Ordinal)) return;
             Settings.QSelectedModel = value.Trim();
+            ResetComparisonAnswers();
             NormalizeProviderReasoningEffort();
             RaisePropertyChanged();
             _ = PersistSettingsAsync();
@@ -296,7 +329,8 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         get => Settings.QReasoningEffort;
         set
         {
-            var effort = string.IsNullOrWhiteSpace(value) ? "auto" : value.Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(value)) return;
+            var effort = value.Trim().ToLowerInvariant();
             if (string.Equals(Settings.QReasoningEffort, effort, StringComparison.OrdinalIgnoreCase)) return;
             Settings.QReasoningEffort = effort;
             NormalizeProviderReasoningEffort();
@@ -340,10 +374,10 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
     public bool IsEdgePill => Settings.DefaultPosition is PositionMode.TopLeft or PositionMode.TopRight;
     public bool IsHolePunchMode => Settings.IslandWidth <= 90 && Settings.IslandHeight <= 48;
     public bool ShowCompactMediaContent => ShowMedia && !IsQActive && !IsHolePunchMode;
-    public bool ShowCompactQContent => IsQActive && !IsHolePunchMode;
-    public bool ShowCompactHolePunchQOutput => IsQActive && IsHolePunchMode;
+    public bool ShowCompactQContent => IsQActive && (!IsHolePunchMode || QCompareEnabled);
+    public bool ShowCompactHolePunchQOutput => IsQActive && IsHolePunchMode && !QCompareEnabled;
     public bool ShowCompactArtSurface => !IsQActive && ((ShowMedia && !IsHolePunchMode) || (IsHolePunchMode && HasArtwork));
-    public bool ShowCompactStatusContent => !IsHolePunchMode;
+    public bool ShowCompactStatusContent => !IsHolePunchMode && !QShowCompactComparison;
 
     private static string CleanQResponseText(string response)
     {
@@ -364,10 +398,13 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
     // When a settings window is open we pin the island expanded so size/appearance changes are visible live.
     public bool KeepExpanded { get => _keepExpanded; set { if (SetProperty(ref _keepExpanded, value)) { RaisePropertyChanged(nameof(PinExpanded)); if (value) IsExpanded = true; } } }
     public bool IsDarkTheme { get => _isDarkTheme; private set => SetProperty(ref _isDarkTheme, value); }
+    public ThemePalette QThemePalette => Settings.Theme == ThemeMode.Custom ? ThemePalette.Custom(Settings.CustomThemeColorHex)
+        : IsDarkTheme ? ThemePalette.Dark : ThemePalette.Light;
+    private bool IsCustomTheme => Settings.Theme == ThemeMode.Custom;
     private MediaBrush? CustomTextBrush => Settings.UseCustomColors && !string.IsNullOrWhiteSpace(Settings.TextColorHex)
         ? FrozenBrush(Settings.TextColorHex) : null;
-    public MediaBrush PrimaryTextBrush => CustomTextBrush ?? (IsDarkTheme ? FrozenBrush("#F8FBFF") : FrozenBrush("#172033"));
-    public MediaBrush SecondaryTextBrush => CustomTextBrush ?? (IsDarkTheme ? FrozenBrush("#AAB5C6") : FrozenBrush("#526078"));
+    public MediaBrush PrimaryTextBrush => IsCustomTheme ? FrozenBrush(QThemePalette.Text) : CustomTextBrush ?? (IsDarkTheme ? FrozenBrush("#F8FBFF") : FrozenBrush("#172033"));
+    public MediaBrush SecondaryTextBrush => IsCustomTheme ? FrozenBrush(QThemePalette.Muted) : CustomTextBrush ?? (IsDarkTheme ? FrozenBrush("#AAB5C6") : FrozenBrush("#526078"));
     public MediaBrush AccentTextBrush => AccentBrush;
     // Effective accent: album-art adaptive > custom > default. Drives the accent brush used across the island.
     private string EffectiveAccentHex =>
@@ -376,15 +413,17 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         : "#5AA7FF";
     public MediaBrush AccentBrush => FrozenBrush(EffectiveAccentHex);
     public MediaBrush AccentSoftBrush => FrozenBrush(WithAlpha(EffectiveAccentHex, 0x33));
-    public MediaBrush IslandSurfaceBrush => IsDarkTheme ? FrozenBrush("#FA000000") : FrozenBrush("#FFF5F5F7");
-    public MediaBrush IslandCardBrush => IsDarkTheme ? FrozenBrush("#FF1C1C1E") : FrozenBrush("#FFFFFFFF");
-    public MediaBrush IslandDividerBrush => IsDarkTheme ? FrozenBrush("#FF2D2D30") : FrozenBrush("#FFD1D1D6");
+    public MediaBrush IslandSurfaceBrush => IsCustomTheme ? FrozenBrush(QThemePalette.Surface) : IsDarkTheme ? FrozenBrush("#FA000000") : FrozenBrush("#FFF5F5F7");
+    public MediaBrush IslandCardBrush => IsCustomTheme ? FrozenBrush(QThemePalette.Card) : IsDarkTheme ? FrozenBrush("#FF1C1C1E") : FrozenBrush("#FFFFFFFF");
+    public MediaBrush IslandDividerBrush => IsCustomTheme ? FrozenBrush(QThemePalette.Border) : IsDarkTheme ? FrozenBrush("#FF2D2D30") : FrozenBrush("#FFD1D1D6");
     // Shell controls and progress bars need real theme-aware contrast. The old shared
     // AppleWhite resources disappeared against the light island surface.
-    public MediaBrush ShellControlBrush => IsDarkTheme ? FrozenBrush("#FFF5F5F7") : FrozenBrush("#FF1C1C1E");
+    public MediaBrush ShellControlBrush => IsCustomTheme ? FrozenBrush(QThemePalette.Text) : IsDarkTheme ? FrozenBrush("#FFF5F5F7") : FrozenBrush("#FF1C1C1E");
     public MediaBrush ShellControlHoverBrush => IsDarkTheme ? FrozenBrush("#1FFFFFFF") : FrozenBrush("#14000000");
-    public MediaBrush ProgressFillBrush => IsDarkTheme ? FrozenBrush("#FFF5F5F7") : FrozenBrush("#FF3A3A3C");
-    public MediaBrush ProgressTrackBrush => IsDarkTheme ? FrozenBrush("#FF36363A") : FrozenBrush("#FFD1D1D6");
+    // Media progress is part of the island's accent system, so it follows the same
+    // artwork/custom accent as the visualizer, timer orb, and timer activity panel.
+    public MediaBrush ProgressFillBrush => AccentBrush;
+    public MediaBrush ProgressTrackBrush => IsCustomTheme ? FrozenBrush(QThemePalette.Border) : IsDarkTheme ? FrozenBrush("#FF36363A") : FrozenBrush("#FFD1D1D6");
     public System.Windows.Media.FontFamily UiFontFamily
     {
         get { try { return new System.Windows.Media.FontFamily(Settings.FontFamilyName); } catch { return new System.Windows.Media.FontFamily("Segoe UI Variable Text"); } }
@@ -1065,8 +1104,11 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
 
     public void ApplySettings()
     {
+        EnsureCompareProvider();
+        if (QCompareEnabled && _qComparison.Snapshot.Left.State != QRunState.Idle
+            && (_qComparison.Snapshot.Left.ProviderId != QSelectedProvider || _qComparison.Snapshot.Left.Model != QSelectedModel)) ResetComparisonAnswers();
         _mediaService.SetPreferredApp(Settings.SelectedMediaApp);
-        IsDarkTheme = _themeService.IsDark(Settings.Theme);
+        IsDarkTheme = IsCustomTheme ? ThemePalette.Custom(Settings.CustomThemeColorHex).IsDark : _themeService.IsDark(Settings.Theme);
         if (Settings.AlwaysExpanded && !IsHolePunchMode) IsExpanded = true;
         else if (IsHolePunchMode && !IsQActive && !KeepExpanded) IsExpanded = false;
         UpdateCachedSettings();
@@ -1081,57 +1123,86 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         if (targetWindow != nint.Zero) _qTargetWindow = targetWindow;
     }
 
+    private CancellationTokenSource? _qActivation;
+    private void CancelQActivation()
+    {
+        var pending = _qActivation;
+        _qActivation = null;
+        pending?.Cancel();
+    }
+
     public async Task StartQAsync(nint targetWindow = default, string? hotkeyShortcutName = null)
     {
+        // Publish Ready and submit the shortcut on the same dispatcher. Worker continuations
+        // could otherwise submit while the UI still said Capturing and silently skip the prompt.
+        var ui = System.Windows.Application.Current?.Dispatcher;
+        if (ui is not null && !ui.CheckAccess())
+        {
+            await ui.InvokeAsync(() => StartQAsync(targetWindow, hotkeyShortcutName)).Task.Unwrap();
+            return;
+        }
         if (!Settings.QEnabled) return;
+        CancelQActivation();
+        var activation = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(Settings.QTimeoutSeconds, 5, 300)));
+        _qActivation = activation;
+        bool IsCurrent() => ReferenceEquals(_qActivation, activation) && !activation.IsCancellationRequested;
         if (targetWindow != nint.Zero) _qTargetWindow = targetWindow;
         _qAutoCloseTimer.Stop();
-        _qSession.Cancel();
+        _qSession.Clear();
+        _qComparison.Clear();
         if (Settings.QAutoExpandIsland) IsExpanded = true;
-        OnUi(() =>
-        {
-            // Make Q the active presentation before capture/OCR starts. Capture can take a
-            // noticeable amount of time or return no context on protected/minimized windows;
-            // the user should still see a usable Q surface instead of an empty black shell.
-            _qSnapshot = new QSessionSnapshot(
-                QRunState.Capturing,
-                QMode.Ask,
-                string.Empty,
-                string.Empty,
-                "Reading active window…",
-                null,
-                null,
-                Settings.QSelectedProvider,
-                Settings.QSelectedModel);
-            RaiseQProperties();
-        });
+        _qSnapshot = new QSessionSnapshot(QRunState.Capturing, QMode.Ask, string.Empty, string.Empty,
+            "Reading active window…", null, null, Settings.QSelectedProvider, Settings.QSelectedModel);
+        RaiseQProperties();
         try
         {
-            await RefreshCodexModelsAsync().ConfigureAwait(false);
-            var context = await _qScreen.CaptureAsync(_qTargetWindow, Settings.QCaptureMode == Models.QCaptureMode.ActiveMonitor ? DynamicIsland.Q.Core.QCaptureMode.ActiveMonitor : DynamicIsland.Q.Core.QCaptureMode.ActiveWindow, CancellationToken.None).ConfigureAwait(false);
-            await _qSession.BeginAsync(DynamicIsland.Q.Core.QMode.Ask, Settings.QSelectedProvider, Settings.QSelectedModel, context).ConfigureAwait(false);
-
+            await RefreshCodexModelsAsync();
+            activation.Token.ThrowIfCancellationRequested();
+            if (!IsCurrent()) return;
+            var context = await _qScreen.CaptureAsync(_qTargetWindow,
+                Settings.QCaptureMode == Models.QCaptureMode.ActiveMonitor ? DynamicIsland.Q.Core.QCaptureMode.ActiveMonitor
+                    : DynamicIsland.Q.Core.QCaptureMode.ActiveWindow, activation.Token);
+            activation.Token.ThrowIfCancellationRequested();
+            if (!IsCurrent()) return;
+            await _qSession.BeginAsync(QMode.Ask, Settings.QSelectedProvider, Settings.QSelectedModel, context, activation.Token);
+            if (!IsCurrent()) return;
             var shortcutName = string.IsNullOrWhiteSpace(hotkeyShortcutName) ? null : hotkeyShortcutName.Trim();
-            var shortcutPrompt = shortcutName is null
-                ? null
-                : Settings.QShortcuts?.FirstOrDefault(shortcut =>
-                    string.Equals(shortcut.Name, shortcutName, StringComparison.OrdinalIgnoreCase))?.Prompt;
-            if (!string.IsNullOrWhiteSpace(shortcutPrompt))
-                await SubmitQAsync(shortcutPrompt).ConfigureAwait(false);
+            var shortcutPrompt = shortcutName is null ? null : Settings.QShortcuts?.FirstOrDefault(shortcut =>
+                string.Equals(shortcut.Name, shortcutName, StringComparison.OrdinalIgnoreCase))?.Prompt;
+            if (!string.IsNullOrWhiteSpace(shortcutPrompt)) await SubmitQAsync(shortcutPrompt);
+        }
+        catch (OperationCanceledException)
+        {
+            if (ReferenceEquals(_qActivation, activation))
+            {
+                _qSnapshot = _qSnapshot with { State = QRunState.Cancelled, Status = "Capture stopped", Error = null };
+                RaiseQProperties();
+            }
         }
         catch (Exception ex)
         {
-            OnUi(() => { _qSnapshot = _qSnapshot with { State = QRunState.Error, Status = "Capture failed", Error = ex.Message }; RaiseQProperties(); });
+            if (IsCurrent())
+            {
+                _qSnapshot = _qSnapshot with { State = QRunState.Error, Status = "Capture failed", Error = ex.Message };
+                RaiseQProperties();
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_qActivation, activation)) _qActivation = null;
+            activation.Dispose();
         }
     }
 
     public async Task SubmitQAsync(string prompt)
     {
+        if (string.IsNullOrWhiteSpace(prompt) || QCanStop) return;
         if (!Settings.QDisclosureAccepted)
         {
             OnUi(() => RaiseQProperties());
             return;
         }
+        if (QCompareEnabled) { await SubmitComparisonAsync(prompt); return; }
         await RefreshCodexModelsAsync().ConfigureAwait(false);
         var baseUrl = string.Equals(Settings.QSelectedProvider, "ollama", StringComparison.OrdinalIgnoreCase) ? Settings.QOllamaBaseUrl : null;
         var credential = _qSecrets.Get(Settings.QSelectedProvider);
@@ -1172,13 +1243,18 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         RaiseQProperties();
     }
 
-    public void CancelQ() { _qAutoCloseTimer.Stop(); _qSession.Cancel(); }
-    public void ClearQ() { _qAutoCloseTimer.Stop(); _qSession.Clear(); IsExpanded = false; }
+    public void CancelQ()
+    {
+        var capturing = _qActivation is not null && QState == QRunState.Capturing;
+        CancelQActivation(); _qAutoCloseTimer.Stop(); _qComparison.Cancel(); _qSession.Cancel();
+        if (capturing) { _qSnapshot = _qSnapshot with { State = QRunState.Cancelled, Status = "Capture stopped", Error = null }; RaiseQProperties(); }
+    }
+    public void ClearQ() { CancelQActivation(); _qAutoCloseTimer.Stop(); _qComparison.Clear(); _qSession.Clear(); IsExpanded = false; }
     public void CopyQResponse() { if (!string.IsNullOrWhiteSpace(QResponse)) System.Windows.Clipboard.SetText(QResponse); }
 
     private async Task RefreshCodexModelsAsync()
     {
-        if (!IsCodexSelected || _codexAccount is null || _codexModels.Count > 0) return;
+        if ((!IsCodexSelected && !(QCompareEnabled && QCompareProvider == "codex")) || _codexAccount is null || _codexModels.Count > 0) return;
         try
         {
             await _codexAccount.RefreshAsync(CancellationToken.None).ConfigureAwait(false);
@@ -1188,7 +1264,7 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
             {
                 _codexModels = models;
                 var changed = false;
-                if (SelectedCodexModel is null)
+                if (IsCodexSelected && SelectedCodexModel is null)
                 {
                     Settings.QSelectedModel = models.FirstOrDefault(model => model.IsDefault)?.Id ?? models[0].Id;
                     changed = true;
@@ -1248,12 +1324,15 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
 
     private void OnQChanged(QSessionSnapshot snapshot) => OnUi(() =>
     {
+        if (snapshot != _qSession.Snapshot) return;
         _qSnapshot = snapshot;
         RaiseQProperties();
     });
 
     private void RaiseQProperties()
     {
+        RaiseComparisonProperties();
+        RaisePropertyChanged(nameof(QCanChangeProvider));
         UpdateQAutoCloseTimer();
         RaiseMany(nameof(QState), nameof(QCurrentMode), nameof(QStatusText), nameof(QHeaderStatusText), nameof(QResponse), nameof(QResponseDisplay), nameof(QPromptText), nameof(QPromptDisplay), nameof(QHasPrompt), nameof(QInlineStatusText), nameof(QShowInlineThinking), nameof(QCanStop), nameof(QCanCopyResponse), nameof(QCanRetry), nameof(QShowResponseActions), nameof(QError), nameof(QShortcuts), nameof(QHasShortcuts), nameof(QSelectedModel), nameof(QModelOptions), nameof(QReasoningEffort), nameof(QReasoningEffortOptions), nameof(QIsCodexSelected), nameof(QCodexIsConnected), nameof(QShowCodexSignOut), nameof(QCodexChipText), nameof(QCodexAccountDetails),
         nameof(QSourceText), nameof(QCompactText), nameof(IsQActive), nameof(ShowQSurface), nameof(QIsAsk), nameof(QIsSay), nameof(QIsListening),
@@ -1444,7 +1523,7 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         nameof(ShowCompactRingTrack)); });
     private void OnSystemThemeChanged(object? sender, EventArgs e) => OnUi(() =>
     {
-        IsDarkTheme = _themeService.IsDark(Settings.Theme);
+        IsDarkTheme = IsCustomTheme ? ThemePalette.Custom(Settings.CustomThemeColorHex).IsDark : _themeService.IsDark(Settings.Theme);
         RaiseThemeProperties();
     });
 
@@ -1462,7 +1541,7 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
             nameof(Artwork), nameof(HasArtwork), nameof(ShowMedia), nameof(ScrollTitles));
         // Adaptive accent may have changed via UpdateArtwork; ensure brushes update in place.
         if (Settings.AdaptiveAccent)
-            RaiseMany(nameof(AccentBrush), nameof(AccentSoftBrush), nameof(AccentTextBrush));
+            RaiseMany(nameof(AccentBrush), nameof(AccentSoftBrush), nameof(AccentTextBrush), nameof(ProgressFillBrush));
         RaiseMediaCommandsCanExecute();
     }
 
@@ -1501,7 +1580,7 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
     {
         RaiseMany(nameof(PrimaryTextBrush), nameof(SecondaryTextBrush), nameof(AccentTextBrush), nameof(PanelBrush),
             nameof(PanelBorderBrush), nameof(AccentBrush), nameof(AccentSoftBrush), nameof(IslandSurfaceBrush), nameof(IslandCardBrush), nameof(IslandDividerBrush),
-            nameof(ShellControlBrush), nameof(ShellControlHoverBrush), nameof(ProgressFillBrush), nameof(ProgressTrackBrush), nameof(UiFontFamily));
+            nameof(ShellControlBrush), nameof(ShellControlHoverBrush), nameof(ProgressFillBrush), nameof(ProgressTrackBrush), nameof(UiFontFamily), nameof(QThemePalette), nameof(IslandBaseSurfaceBrush));
     }
 
     private void RaiseExpansionProperties()
@@ -1599,6 +1678,9 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
     {
         // Settings affect many subsystems — raise grouped notifications but keep structural
         // visual-mode notifications precise (handled via layout/theme groups).
+        // Recompute from the current artwork when AdaptiveAccent is toggled live; otherwise
+        // enabling it after startup would wait until the next track change to take effect.
+        _adaptiveAccent = Settings.AdaptiveAccent ? Infrastructure.ImageColor.Dominant(_artworkBytes) : null;
         RaiseLayoutProperties();
         RaiseThemeProperties();
         RaiseMediaPresentationChanged();
@@ -1775,7 +1857,7 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         RaisePropertyChanged(nameof(ShowExpandedMediaRing));
         RaisePropertyChanged(nameof(ShowCompactRingTrack));
         if (accentChanged && Settings.AdaptiveAccent)
-            RaiseMany(nameof(AccentBrush), nameof(AccentSoftBrush), nameof(AccentTextBrush));
+            RaiseMany(nameof(AccentBrush), nameof(AccentSoftBrush), nameof(AccentTextBrush), nameof(ProgressFillBrush));
     }
 
     private static void OnUi(Action action)
@@ -1823,6 +1905,9 @@ public sealed partial class IslandViewModel : ObservableObject, IDisposable
         _timerAlarmService.Changed -= OnTimerAlarmChanged;
         _themeService.SystemThemeChanged -= OnSystemThemeChanged;
         _qSession.Changed -= OnQChanged;
+        CancelQActivation();
+        _qComparison.Changed -= OnQComparisonChanged;
+        _qComparison.Dispose();
         if (_codexAccount is not null) _codexAccount.Changed -= OnCodexAccountChanged;
         _qSession.Clear();
         if (_airPodsService != null) _airPodsService.Changed -= OnAirPodsChanged;

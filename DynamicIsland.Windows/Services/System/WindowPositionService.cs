@@ -80,116 +80,53 @@ public sealed class WindowPositionService
 
     }
 
-    public void PositionInitial(Window window, AppSettings settings, double? visiblePillWidthDip = null)
+    private readonly Dictionary<Window, (double Width, double Height)> _visibleSizes = [];
+
+    public void PositionInitial(Window window, AppSettings settings, double? visiblePillWidthDip = null, double? visiblePillHeightDip = null)
     {
         var handle = new WindowInteropHelper(window).Handle;
         if (handle == nint.Zero) return;
-        var screen = SelectScreen(settings);
-        var dpi = Math.Max(96u, NativeMethods.GetDpiForWindow(handle));
-        // ApplyLayout updates Width/Height immediately before this call. ActualWidth/ActualHeight
-        // still describe the previous layout pass at that point; using them here resizes the HWND
-        // back to its stale height and clips newly-added rows such as the AirPods card. Prefer the
-        // explicit requested dimensions and use Actual only for SizeToContent/Auto windows.
-        var widthDip = WindowSizingPolicy.EffectiveDimension(window.Width, window.ActualWidth);
-        var heightDip = WindowSizingPolicy.EffectiveDimension(window.Height, window.ActualHeight);
-        var width = (int)Math.Round(widthDip * dpi / 96d);
-        var height = (int)Math.Round(heightDip * dpi / 96d);
-        var pillWidth = (int)Math.Round(Math.Clamp(visiblePillWidthDip ?? settings.IslandWidth, 72, 1200) * dpi / 96d);
-        var edgeOverhang = Math.Max(0, (width - pillWidth) / 2);
-
-        int x;
-        int y;
-        if (settings.DefaultPosition == PositionMode.Manual &&
-            settings.ManualLeftPixels is double manualX && settings.ManualTopPixels is double manualY)
-        {
-            x = (int)Math.Round(manualX);
-            y = (int)Math.Round(manualY);
-        }
-        else if (settings.DefaultPosition == PositionMode.TopLeft)
-        {
-            x = screen.WorkingArea.Left + 18 - edgeOverhang;
-            y = TopY(screen, settings, dpi / 96d, workingArea: true);
-        }
-        else if (settings.DefaultPosition == PositionMode.TopRight)
-        {
-            x = screen.WorkingArea.Right - pillWidth - 18 - edgeOverhang;
-            y = TopY(screen, settings, dpi / 96d, workingArea: true);
-        }
-        else
-        {
-            x = screen.Bounds.Left + (screen.Bounds.Width - width) / 2;
-            y = TopY(screen, settings, dpi / 96d, workingArea: false);
-        }
-
-        var visibleWidth = settings.DefaultPosition is PositionMode.TopLeft or PositionMode.TopRight ? pillWidth : width;
-        var visible = EnsureVisible(screen, x, y, width, height, visibleWidth);
-        NativeMethods.SetWindowPos(handle, nint.Zero, visible.X, visible.Y, width, height,
-            NativeMethods.SwpNoActivate | NativeMethods.SwpNoZOrder);
+        if (visiblePillWidthDip is { } w && visiblePillHeightDip is { } h)
+            _visibleSizes[window] = (w, h);
+        var visible = _visibleSizes.GetValueOrDefault(window, (settings.IslandWidth, settings.IslandHeight));
+        SetBounds(window, settings, WindowSizingPolicy.EffectiveDimension(window.Width, window.ActualWidth),
+            WindowSizingPolicy.EffectiveDimension(window.Height, window.ActualHeight), visible.Width, visible.Height);
     }
 
-    public void KeepAnchorWhileResizing(Window window, AppSettings settings)
-    {
-        if (settings.DefaultPosition == PositionMode.Manual) return;
-        var handle = new WindowInteropHelper(window).Handle;
-        if (handle == nint.Zero) return;
-        var screen = SelectScreen(settings);
-        var dpi = Math.Max(96u, NativeMethods.GetDpiForWindow(handle));
-        var width = (int)Math.Round(window.ActualWidth * dpi / 96d);
-        var topLeft = settings.DefaultPosition == PositionMode.TopLeft;
-        var topRight = settings.DefaultPosition == PositionMode.TopRight;
-        var compactWidth = (int)Math.Round(Math.Clamp(settings.IslandWidth, 72, 360) * dpi / 96d);
-        var edgeOverhang = Math.Max(0, (width - compactWidth) / 2);
-        int x = topLeft
-            ? screen.WorkingArea.Left + 18 - edgeOverhang
-            : topRight
-                ? screen.WorkingArea.Right - compactWidth - 18 - edgeOverhang
-                : screen.Bounds.Left + (screen.Bounds.Width - width) / 2;
-        int y = TopY(screen, settings, dpi / 96d, topLeft || topRight);
-        NativeMethods.SetWindowPos(handle, nint.Zero, x, y, 0, 0,
-            NativeMethods.SwpNoActivate | NativeMethods.SwpNoZOrder | NativeMethods.SwpNoSize);
-    }
+    public void KeepAnchorWhileResizing(Window window, AppSettings settings) => PositionInitial(window, settings);
 
-    /// <summary>
-    /// Sets the window's full rectangle (centered size + position) in one native call. Used by the
-    /// per-frame resize animation so a single driver owns both size and position — this avoids the
-    /// WPF Width/Height vs. reposition feedback loop that left height desynced from width.
-    /// </summary>
     public void SetAnimatedBounds(Window window, AppSettings settings, double widthDip, double heightDip)
     {
+        var visible = _visibleSizes.GetValueOrDefault(window, (settings.IslandWidth, settings.IslandHeight));
+        SetBounds(window, settings, widthDip, heightDip, visible.Width, visible.Height);
+    }
+
+    private void SetBounds(Window window, AppSettings settings, double widthDip, double heightDip, double visibleWidth, double visibleHeight)
+    {
         var handle = new WindowInteropHelper(window).Handle;
         if (handle == nint.Zero) return;
-        var dpi = Math.Max(96u, NativeMethods.GetDpiForWindow(handle));
-        var scale = dpi / 96d;
-        var widthPx = Math.Max(1, (int)Math.Round(widthDip * scale));
-        var heightPx = Math.Max(1, (int)Math.Round(heightDip * scale));
         var screen = SelectScreen(settings);
-        var compactWidthPx = (int)Math.Round(Math.Clamp(settings.IslandWidth, 72, 360) * scale);
-        var edgeOverhang = Math.Max(0, (widthPx - compactWidthPx) / 2);
-
-        int x, y;
-        if (settings.DefaultPosition == PositionMode.Manual &&
-            settings.ManualLeftPixels is double mx && settings.ManualTopPixels is double my)
+        var scale = Math.Max(96u, NativeMethods.GetDpiForWindow(handle)) / 96d;
+        var area = screen.WorkingArea;
+        var horizontal = settings.DefaultPosition switch
         {
-            x = (int)Math.Round(mx);
-            y = (int)Math.Round(my);
-        }
-        else if (settings.DefaultPosition == PositionMode.TopLeft)
+            PositionMode.TopLeft or PositionMode.MiddleLeft or PositionMode.BottomLeft => 0,
+            PositionMode.TopRight or PositionMode.MiddleRight or PositionMode.BottomRight => 2,
+            _ => 1
+        };
+        var vertical = settings.DefaultPosition switch
         {
-            x = screen.WorkingArea.Left + 18 - edgeOverhang;
-            y = TopY(screen, settings, scale, workingArea: true);
-        }
-        else if (settings.DefaultPosition == PositionMode.TopRight)
-        {
-            x = screen.WorkingArea.Right - compactWidthPx - 18 - edgeOverhang;
-            y = TopY(screen, settings, scale, workingArea: true);
-        }
-        else
-        {
-            x = screen.Bounds.Left + (screen.Bounds.Width - widthPx) / 2;
-            y = TopY(screen, settings, scale, workingArea: false);
-        }
-
-        NativeMethods.SetWindowPos(handle, nint.Zero, x, y, widthPx, heightPx,
+            PositionMode.MiddleLeft or PositionMode.Center or PositionMode.MiddleRight => 1,
+            PositionMode.BottomLeft or PositionMode.BottomCenter or PositionMode.BottomRight => 2,
+            _ => 0
+        };
+        var manual = settings.DefaultPosition == PositionMode.Manual;
+        var position = IslandPlacement.Place(area.Left, area.Top, area.Width, area.Height,
+            widthDip * scale, visibleWidth * scale, visibleHeight * scale, 8 * scale,
+            horizontal, vertical, settings.SideOffset * scale, settings.TopOffset * scale,
+            manual ? settings.ManualLeftPixels : null, manual ? settings.ManualTopPixels : null);
+        NativeMethods.SetWindowPos(handle, nint.Zero, (int)Math.Round(position.X), (int)Math.Round(position.Y),
+            (int)Math.Round(widthDip * scale), (int)Math.Round(heightDip * scale),
             NativeMethods.SwpNoActivate | NativeMethods.SwpNoZOrder);
     }
 
@@ -201,12 +138,16 @@ public sealed class WindowPositionService
         settings.DefaultPosition = PositionMode.Manual;
         settings.ManualLeftPixels = rect.Left;
         settings.ManualTopPixels = rect.Top;
+        settings.SideOffset = 0;
+        settings.TopOffset = 0;
         settings.ManualMonitorDeviceName = screen.DeviceName;
     }
 
     public void Recenter(Window window, AppSettings settings)
     {
         settings.DefaultPosition = PositionMode.TopCenter;
+        settings.SideOffset = 0;
+        settings.TopOffset = 2;
         settings.ManualLeftPixels = null;
         settings.ManualTopPixels = null;
         settings.ManualMonitorDeviceName = null;

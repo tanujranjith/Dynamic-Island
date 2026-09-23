@@ -23,29 +23,47 @@ public partial class IslandWindow : Window
     private readonly TimerAlarmViewModel _timerViewModel;
     private readonly ScreenContextService _qScreen;
     private readonly DispatcherTimer _collapseTimer = new();
+    private readonly DispatcherTimer _timerPanelLeaveTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private readonly DispatcherTimer _idleTimer = new() { Interval = TimeSpan.FromSeconds(4) };
     private readonly DispatcherTimer _fullscreenTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private bool _sourceReady;
+    private bool _initialLayoutStabilized;
+    private bool _mainExpansionPending;
     private bool _dragging;
     private bool _dimmed;
     private bool _hiddenForFullscreen;
     private bool _settingsWindowOpen;
     private bool _scrubbing;
     private bool _timerPanelOpen;
+    private bool _timerPanelHostShown;
+    private bool _timerPanelHostAnimating;
+    private bool _timerPanelClosing;
+    private bool _timerPanelPinnedByClick;
+    private int _timerPanelAnimationGeneration;
     private bool _suppressExpandedAnimation;
     private bool _liveTimerVisible;
     private bool _lastIsStatsStyle;
     private bool _lastShowAirPodsCard;
     private bool _lastShowWidgetsPanel;
+    private bool _urgentAlertVisible;
     private Storyboard? _qThinkingAnimation;
     private bool _qFollowLatest = true;
 
-    private double TimerPanelWidth => WindowSizingPolicy.BoundedDimension(1000, AvailableWorkArea.Width);
-    private double TimerPanelHeight => WindowSizingPolicy.BoundedDimension(520, AvailableWorkArea.Height, 76);
+    private const double TimerPanelNormalCornerRadius = 28d;
+    private const double TimerPanelMorphCornerRadius = 300d;
+    private const double TimerPanelCornerMorphDuration = 180d;
+
+    private double TimerPanelWidth => WindowSizingPolicy.BoundedDimension(900, AvailableWorkArea.Width);
+    // The timer editor contains a complete timer card plus a stopwatch card. A 520-DIP shell
+    // leaves the editor viewport just short of the first card on smaller displays, making the
+    // panel look like it is cut off even though its scrollbar is active. Use the available screen
+    // height more effectively while retaining a small safety margin for the taskbar/edge.
+    private double TimerPanelHeight => WindowSizingPolicy.BoundedDimension(600, AvailableWorkArea.Height, 24);
     private (double Width, double Height) AvailableWorkArea => _position.AvailableSize(this, _viewModel.Settings);
     private const double LiveTimerExtraHeight = 86d;
 
     public event EventHandler? OpenSettingsRequested;
+    public event EventHandler? OpenQSettingsRequested;
     public event EventHandler? OpenClipboardRequested;
     public event EventHandler? RecenterRequested;
 
@@ -53,6 +71,7 @@ public partial class IslandWindow : Window
     {
         InitializeComponent();
         DataContext = _viewModel = viewModel;
+        ApplyQTheme();
         _timerViewModel = timerViewModel;
         TimerPanelContent.DataContext = timerViewModel;
         LiveTimerStrip.DataContext = timerViewModel;
@@ -70,6 +89,7 @@ public partial class IslandWindow : Window
             _collapseTimer.Stop();
             if (!_timerPanelOpen && !GlassShell.IsMouseOver && !_dragging && !_viewModel.PinExpanded) _viewModel.IsExpanded = false;
         };
+        _timerPanelLeaveTimer.Tick += (_, _) => TryAutoCloseTimerPanel();
         _idleTimer.Tick += (_, _) =>
         {
             _idleTimer.Stop();
@@ -97,14 +117,31 @@ public partial class IslandWindow : Window
             StatsExpandedContent.SizeChanged += (_, _) => UpdateAutoGrow();
             StatsOverlay.SizeChanged += (_, _) => UpdateAutoGrow();
             GlassShell.SizeChanged += (_, _) => { ApplyRoundedShellClip(); UrgentAlertStrip.Margin = new Thickness(12, GlassShell.ActualHeight + 12, 12, 0); UrgentAlertStrip.MaxWidth = Math.Max(1, Math.Min(650, ActualWidth - 24)); };
+            SyncUrgentAlertStrip(animate: false);
+            // Let the first real render commit the compact HWND/content geometry before accepting
+            // an expansion request. Without this warm-up, the first hover/click can race WPF's
+            // initial measure and be applied as a layout snap instead of a visible morph.
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (!IsLoaded) return;
+                ApplyLayout(animate: false);
+                UpdateLayout();
+                _initialLayoutStabilized = true;
+                var shouldExpand = _mainExpansionPending;
+                _mainExpansionPending = false;
+                if (shouldExpand && !_timerPanelOpen && !_viewModel.IsExpanded && GlassShell.IsMouseOver)
+                    _viewModel.IsExpanded = true;
+            }, DispatcherPriority.Render);
         };
         GotKeyboardFocus += (_, _) => _viewModel.InteractionProtected = true;
         LostKeyboardFocus += (_, _) => Dispatcher.BeginInvoke(() => _viewModel.InteractionProtected = _timerPanelOpen || IsKeyboardFocusWithin || Mouse.Captured is not null);
+        LostKeyboardFocus += (_, _) => Dispatcher.BeginInvoke(TryAutoCloseTimerPanel);
         GotMouseCapture += (_, _) => _viewModel.InteractionProtected = true;
         LostMouseCapture += (_, _) => _viewModel.InteractionProtected = _timerPanelOpen || IsKeyboardFocusWithin;
         _viewModel.PropertyChanged += ViewModelOnPropertyChanged;
         _viewModel.NotificationGroupOpenRequested += OnNotificationGroupOpen;
         _timerViewModel.PropertyChanged += TimerViewModelOnPropertyChanged;
+        _timerViewModel.ShowAlarmTabRequested += TimerViewModel_ShowAlarmTabRequested;
         SystemEvents.DisplaySettingsChanged += SystemEventsOnDisplaySettingsChanged;
         DpiChanged += (_, _) => Dispatcher.BeginInvoke(() => ApplyLayout(animate: false), DispatcherPriority.Loaded);
         SystemEvents.PowerModeChanged += SystemEventsOnPowerModeChanged;
@@ -115,8 +152,10 @@ public partial class IslandWindow : Window
             _viewModel.PropertyChanged -= ViewModelOnPropertyChanged;
             _viewModel.NotificationGroupOpenRequested -= OnNotificationGroupOpen;
             _timerViewModel.PropertyChanged -= TimerViewModelOnPropertyChanged;
+            _timerViewModel.ShowAlarmTabRequested -= TimerViewModel_ShowAlarmTabRequested;
             _fullscreenTimer.Stop();
             _idleTimer.Stop();
+            _timerPanelLeaveTimer.Stop();
             try { _qThinkingAnimation?.Remove(this); } catch { }
         };
     }
@@ -193,12 +232,44 @@ public partial class IslandWindow : Window
         _position.ApplyBackdropFrost(this, enable: false, _viewModel.IsDarkTheme);
     }
 
+    private bool _lastQSurface, _lastQActive, _lastQComparison;
+    private ThemePalette? _lastQPalette;
+    private void ApplyQTheme()
+    {
+        var palette = _viewModel.QThemePalette;
+        if (palette == _lastQPalette) return;
+        _lastQPalette = palette;
+        var values = new Dictionary<string, string>
+        {
+            ["QSurface"] = palette.Surface, ["QCard"] = palette.Card, ["QControl"] = palette.Control,
+            ["QHover"] = palette.Hover, ["QBorder"] = palette.Border, ["QText"] = palette.Text,
+            ["QMuted"] = palette.Muted, ["QAccent"] = palette.Accent, ["QSelected"] = palette.Selected
+        };
+        foreach (var (key, hex) in values)
+        {
+            var brush = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex));
+            brush.Freeze(); Resources[key] = brush;
+        }
+    }
     private void ViewModelOnPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(IslandViewModel.IsExpanded))
+        if (e.PropertyName is nameof(IslandViewModel.QThemePalette) or nameof(IslandViewModel.IsDarkTheme)) ApplyQTheme();
+        if (e.PropertyName == nameof(IslandViewModel.QCanStop)) UpdateQPromptComposer();
+        if (e.PropertyName == nameof(IslandViewModel.AccentBrush))
+        {
+            // Timer tab visuals are set in code because the active state is switched
+            // imperatively. Reapply them when artwork changes so the open panel follows
+            // the same adaptive accent as the island and timer orb.
+            if (_timerPanelOpen)
+            {
+                SetTimerTabVisual(TimerTabButton, TimerTabContent.Visibility == Visibility.Visible);
+                SetTimerTabVisual(AlarmTabButton, AlarmTabContent.Visibility == Visibility.Visible);
+                SetTimerTabVisual(StopwatchTabButton, StopwatchTabContent.Visibility == Visibility.Visible);
+            }
+        }
+        else if (e.PropertyName == nameof(IslandViewModel.IsExpanded))
         {
             if (_suppressExpandedAnimation) return;
-            if (_timerPanelOpen) _timerPanelOpen = false; _viewModel.TimerEditorOpen = false; _viewModel.InteractionProtected = IsKeyboardFocusWithin;
             _position.ApplyWindowStyles(this, _viewModel.Settings, _viewModel.IsCompact);
             // Dynamic rows (AirPods, timers, quotes) can appear while the island is compact.
             // Recompute the host HWND before expanding; animating only the inner shell leaves the
@@ -226,12 +297,14 @@ public partial class IslandWindow : Window
                 ApplyVisualMode();
             }
         }
-        else if (e.PropertyName == nameof(IslandViewModel.IsQActive) || e.PropertyName == nameof(IslandViewModel.ShowQSurface))
+        else if (e.PropertyName == nameof(IslandViewModel.IsQActive) || e.PropertyName == nameof(IslandViewModel.ShowQSurface) || e.PropertyName == nameof(IslandViewModel.QCompareEnabled))
         {
             if (_timerPanelOpen) return;
+            if (_lastQSurface == _viewModel.ShowQSurface && _lastQActive == _viewModel.IsQActive && _lastQComparison == _viewModel.QCompareEnabled) return;
+            _lastQSurface = _viewModel.ShowQSurface; _lastQActive = _viewModel.IsQActive; _lastQComparison = _viewModel.QCompareEnabled;
             ApplyVisualMode();
-            if (_viewModel.IsExpanded) ApplyLayout(animate: false);
-            if (_viewModel.ShowQSurface)
+            ApplyLayout(animate: false);
+            if (_viewModel.ShowQSurface && _viewModel.IsExpanded)
             {
                 _qFollowLatest = true;
                 Dispatcher.BeginInvoke(() =>
@@ -271,6 +344,22 @@ public partial class IslandWindow : Window
             if (_viewModel.IsAirPodsBannerActive) PlayAirPodsConnectionIntro();
             else ReturnFromAirPodsCompactBanner();
         }
+        else if (e.PropertyName == nameof(IslandViewModel.HasUrgentAlert))
+        {
+            // Timer completion notifications arrive on the same cadence as timer ticks. Defer
+            // the visual transition to Render and guard the state so the entrance never restarts.
+            Dispatcher.BeginInvoke(() => SyncUrgentAlertStrip(animate: true), DispatcherPriority.Render);
+        }
+        else if (e.PropertyName == nameof(IslandViewModel.ShowTimerOrb))
+        {
+            // The privacy dot must move with the timer activity orb instead of landing on top of it.
+            if (!_timerPanelOpen && !_viewModel.IsExpanded)
+            {
+                var metrics = Metrics();
+                UpdateTimerOrbLayout(metrics.cW, metrics.cH);
+                UpdatePrivacyIndicatorLayout(metrics.cW, metrics.cH, animate: true);
+            }
+        }
         else if (e.PropertyName == nameof(IslandViewModel.QState) ||
                  e.PropertyName == nameof(IslandViewModel.QShowInlineThinking) ||
                  e.PropertyName == nameof(IslandViewModel.QResponse) ||
@@ -305,6 +394,68 @@ public partial class IslandWindow : Window
     }
 
     private Storyboard? _notifIntro;
+
+    private void SyncUrgentAlertStrip(bool animate)
+    {
+        var shouldShow = _viewModel.HasUrgentAlert;
+        if (shouldShow == _urgentAlertVisible)
+        {
+            if (!shouldShow) UrgentAlertStrip.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        _urgentAlertVisible = shouldShow;
+        UrgentAlertStrip.BeginAnimation(UIElement.OpacityProperty, null);
+        UrgentAlertScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        UrgentAlertScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+        UrgentAlertTranslate.BeginAnimation(TranslateTransform.YProperty, null);
+
+        if (!shouldShow)
+        {
+            if (!animate || _viewModel.IsReducedMotion)
+            {
+                UrgentAlertStrip.Opacity = 0d;
+                UrgentAlertStrip.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            UrgentAlertStrip.Opacity = 1d;
+            var fadeOut = new DoubleAnimation(0d, TimeSpan.FromMilliseconds(180));
+            fadeOut.Completed += (_, _) =>
+            {
+                if (_viewModel.HasUrgentAlert) return;
+                UrgentAlertStrip.Visibility = Visibility.Collapsed;
+                UrgentAlertScale.ScaleX = UrgentAlertScale.ScaleY = 1d;
+                UrgentAlertTranslate.Y = 0d;
+            };
+            UrgentAlertStrip.BeginAnimation(UIElement.OpacityProperty, fadeOut);
+            UrgentAlertTranslate.BeginAnimation(TranslateTransform.YProperty,
+                new DoubleAnimation(0d, -6d, TimeSpan.FromMilliseconds(180))
+                { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } });
+            return;
+        }
+
+        UrgentAlertStrip.Visibility = Visibility.Visible;
+        if (!animate || _viewModel.IsReducedMotion)
+        {
+            UrgentAlertStrip.Opacity = 1d;
+            UrgentAlertScale.ScaleX = UrgentAlertScale.ScaleY = 1d;
+            UrgentAlertTranslate.Y = 0d;
+            return;
+        }
+
+        UrgentAlertStrip.Opacity = 0d;
+        UrgentAlertScale.ScaleX = UrgentAlertScale.ScaleY = 0.94d;
+        UrgentAlertTranslate.Y = -10d;
+        UrgentAlertStrip.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(0d, 1d, TimeSpan.FromMilliseconds(190))
+            { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        var reveal = TimeSpan.FromMilliseconds(260);
+        var ease = new QuinticEase { EasingMode = EasingMode.EaseOut };
+        UrgentAlertScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.94d, 1d, reveal) { EasingFunction = ease });
+        UrgentAlertScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.94d, 1d, reveal) { EasingFunction = ease });
+        UrgentAlertTranslate.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(-10d, 0d, reveal) { EasingFunction = ease });
+    }
 
     private void PlayPrivacyDotIntro()
     {
@@ -472,6 +623,11 @@ public partial class IslandWindow : Window
         // both states, so adjusting the mini island could distort the expanded layout.
         var compactWidth = Math.Clamp(_viewModel.Settings.IslandWidth, 72d, 360d);
         var compactHeight = Math.Clamp(_viewModel.Settings.IslandHeight, 38d, 90d);
+        if (_viewModel.QShowCompactComparison)
+        {
+            compactWidth = Math.Min(Math.Max(compactWidth, 480), Math.Max(72, AvailableWorkArea.Width - 24));
+            compactHeight = Math.Max(compactHeight, 68);
+        }
         var (expandedWidth, expandedHeight) = _viewModel.Settings.IslandSize switch
         {
             // The media header, transport controls, and the live-activity cards need 260px+
@@ -481,6 +637,7 @@ public partial class IslandWindow : Window
             IslandSize.Large => (1000d, 322d + quoteSpace + timerSpace + statsSpace + qSpace + accessorySpace),
             _ => (900d, 292d + quoteSpace + timerSpace + statsSpace + qSpace + accessorySpace)
         };
+        if (_viewModel.QShowCompactComparison) { expandedWidth = Math.Max(expandedWidth, 1100); expandedHeight = Math.Max(expandedHeight, 700); }
         // The transparent HWND must be at least as tall as the pill, otherwise WPF clips
         // a correctly measured Stats dashboard at the canvas boundary.
         var windowHeight = Math.Max(BaseCanvasH + quoteSpace + timerSpace, expandedHeight + 40d);
@@ -547,7 +704,12 @@ public partial class IslandWindow : Window
 
     private void ApplyLayout(bool animate)
     {
-        ApplyVisualMode();
+        // Keep the expanded tree mounted so it can be measured, but do not let it render at full
+        // opacity before AnimatePill has installed its fade clock. That one-frame reveal was the
+        // flash seen at the very beginning of an expansion.
+        var deferExpandedReveal = animate && !_viewModel.IsReducedMotion && _viewModel.IsExpanded;
+        var deferCompactReveal = animate && !_viewModel.IsReducedMotion && !_viewModel.IsExpanded;
+        ApplyVisualMode(deferExpandedReveal, deferCompactReveal);
         var m = Metrics();
         UpdateTimerOrbLayout(m.cW, m.cH);
         UpdatePrivacyIndicatorLayout(m.cW, m.cH, animate);
@@ -557,9 +719,19 @@ public partial class IslandWindow : Window
             Width = m.winW;
             Height = desiredWindowHeight;
         }
-        var targetPillWidth = _timerPanelOpen ? TimerPanelWidth : _viewModel.IsExpanded ? ExpandedPillSize().W : m.cW;
-        _position.PositionInitial(this, _viewModel.Settings, targetPillWidth);
-        AnimatePill(animate);
+        // The transparent HWND stays anchored to the user's main-island position even while the
+        // timer host is open. The timer surface is a sibling overlay; using its width here moves
+        // the main island for TopLeft/TopRight layouts and makes the overlay look like its owner.
+        var targetPillWidth = _viewModel.IsExpanded ? ExpandedPillSize().W : m.cW;
+        var targetPillHeight = _viewModel.IsExpanded ? ExpandedPillSize().H : m.cH;
+        _position.PositionInitial(this, _viewModel.Settings,
+            _timerPanelOpen ? Math.Max(targetPillWidth, TimerPanelWidth) : targetPillWidth,
+            _timerPanelOpen ? Math.Max(targetPillHeight, TimerPanelHeight) : targetPillHeight);
+        // The timer host may be opening or closing while the main shell is changing state. Its
+        // overlay owns that transition, so the main shell must settle synchronously and never
+        // inherit the timer orb's geometry.
+        AnimatePill(animate && !_timerPanelOpen);
+        ApplyTimerPanelHostLayout(animate);
     }
 
     private void UpdateTimerOrbLayout(double compactWidth, double compactHeight)
@@ -567,44 +739,41 @@ public partial class IslandWindow : Window
         var size = Math.Clamp(compactHeight, 38d, 62d);
         CompactTimerOrb.Width = size;
         CompactTimerOrb.Height = size;
-        TimerOrbTranslate.X = compactWidth / 2d + 8d + size / 2d;
+        var airPodsGap = _viewModel.IsAirPodsBannerActive ? 26d : 0d;
+        TimerOrbTranslate.X = compactWidth / 2d + 8d + size / 2d + airPodsGap;
     }
 
     private void UpdatePrivacyIndicatorLayout(double compactWidth, double compactHeight, bool animate)
     {
-        var (activeWidth, activeHeight) = _timerPanelOpen
-            ? (TimerPanelWidth, TimerPanelHeight)
-            : _viewModel.IsExpanded
-                ? ExpandedPillSize()
-                : (compactWidth, compactHeight);
+        // Privacy belongs to the compact island/orb composition, never to the timer panel's
+        // expanded bounds. Keeping this coordinate space stable prevents the dot from flying to
+        // the panel's far edge and then returning when TimerEditorOpen changes the orb visibility.
+        var (activeWidth, activeHeight) = _viewModel.IsExpanded
+            ? ExpandedPillSize()
+            : (compactWidth, compactHeight);
 
         // Follow the shell's trailing edge. Expanded mode keeps the orb near the top controls.
         var targetX = activeWidth / 2d + 12d;
-        var targetY = _viewModel.IsExpanded || _timerPanelOpen
+        if (!_viewModel.IsExpanded && !_timerPanelOpen && _viewModel.ShowTimerOrb)
+        {
+            var timerOrbSize = Math.Clamp(compactHeight, 38d, 62d);
+            var timerOrbRight = TimerOrbTranslate.X + timerOrbSize / 2d;
+            // Place privacy to the right of the timer orb with a small optical gap.
+            targetX = timerOrbRight + 6d + 9d;
+        }
+        var targetY = _viewModel.IsExpanded
             ? 12d
             : Math.Max(0d, (activeHeight - 18d) / 2d);
 
         PrivacyDotTranslate.BeginAnimation(TranslateTransform.XProperty, null);
         PrivacyDotTranslate.BeginAnimation(TranslateTransform.YProperty, null);
-        if (!animate || _viewModel.IsReducedMotion)
-        {
-            PrivacyDotTranslate.X = targetX;
-            PrivacyDotTranslate.Y = targetY;
-            return;
-        }
-
-        var duration = TimeSpan.FromMilliseconds(
-            _viewModel.Settings.AnimationIntensity == AnimationIntensity.Expressive ? 340d : 250d);
-        var ease = new QuinticEase { EasingMode = EasingMode.EaseOut };
-        PrivacyDotTranslate.BeginAnimation(
-            TranslateTransform.XProperty,
-            new DoubleAnimation(targetX, duration) { EasingFunction = ease });
-        PrivacyDotTranslate.BeginAnimation(
-            TranslateTransform.YProperty,
-            new DoubleAnimation(targetY, duration) { EasingFunction = ease });
+        // Position changes are committed immediately. PrivacySeq owns the dot's entrance motion;
+        // animating its location during every layout pass caused the visible far-right flicker.
+        PrivacyDotTranslate.X = targetX;
+        PrivacyDotTranslate.Y = targetY;
     }
 
-    private void ApplyVisualMode()
+    private void ApplyVisualMode(bool deferExpandedReveal = false, bool deferCompactReveal = false)
     {
         var apple = _viewModel.IsAppleStyle;
         var expanded = _viewModel.IsExpanded;
@@ -616,43 +785,48 @@ public partial class IslandWindow : Window
         QContent.Height = qHeight;
         QContent.MaxHeight = q ? qHeight : double.PositiveInfinity;
         QContent.VerticalAlignment = q ? VerticalAlignment.Top : VerticalAlignment.Stretch;
-        SetModeContent(CompactContent, !expanded && !_timerPanelOpen && (apple || _viewModel.IsEdgePill || _viewModel.IsHolePunchMode));
+        SetModeContent(CompactContent, !expanded && (apple || _viewModel.IsEdgePill || _viewModel.IsHolePunchMode || _viewModel.QShowCompactComparison), deferCompactReveal);
         // The full Apple activity deck is the stable shared expanded surface. The compact Stats
         // layout still provides the dense glanceable alternative, while this prevents Stats mode
         // from ever opening into an empty shell during rapid hover/settings transitions.
-        // TimerPanelContent is intentionally hosted inside the shared expanded surface so it uses
-        // the same clipped island material. Keep that parent alive while the timer panel is open;
-        // the timer's opaque black layer covers the media deck underneath.
-        // QContent and TimerPanelContent are overlays hosted inside ExpandedContent. Keep the
-        // shared expanded parent mounted while either overlay is active; collapsing the parent
-        // makes the Island render as a black shell even though the child overlay is visible.
-                ExpandedViewport.Visibility = expanded || _timerPanelOpen ? Visibility.Visible : Visibility.Collapsed;
-        ExpandedContent.Width = Math.Max(600, (_timerPanelOpen ? TimerPanelWidth : Metrics().eW) - (q ? 0 : 56));
-        ExpandedContent.Height = q ? Metrics().eH : _timerPanelOpen ? Math.Max(200, TimerPanelHeight - 44) : double.NaN;
-        SetModeContent(ExpandedContent, expanded || _timerPanelOpen);
+        // TimerPanelContent is deliberately not part of this tree. The timer has its own sibling
+        // host so its transform and hit testing can never change the main island's geometry.
+        ExpandedViewport.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        ExpandedContent.Width = Math.Max(600, Metrics().eW - (q ? 0 : 56));
+        ExpandedContent.Height = q ? Metrics().eH : double.NaN;
+        SetModeContent(ExpandedContent, expanded, deferExpandedReveal);
         SetModeContent(QContent, expanded && q);
-        SetModeContent(StatsCompactContent, !apple && !_viewModel.IsEdgePill && !_viewModel.IsHolePunchMode && !expanded && !_timerPanelOpen);
+        SetModeContent(StatsCompactContent, !apple && !_viewModel.IsEdgePill && !_viewModel.IsHolePunchMode && !expanded && !_viewModel.QShowCompactComparison, deferCompactReveal);
         SetModeContent(StatsExpandedContent, false);
-        SetModeContent(StatsOverlay, !apple && expanded && !_timerPanelOpen);
-        TimerPanelContent.Height = Math.Max(180, TimerPanelHeight - 44);
-        TimerPanelContent.VerticalAlignment = VerticalAlignment.Top;
-        TimerTabContent.Height = AlarmTabContent.Height = Math.Max(100, TimerPanelHeight - 216);
-        SetModeContent(TimerPanelContent, _timerPanelOpen && !q);
+        SetModeContent(StatsOverlay, !apple && expanded);
     }
 
     // Switching visual modes while the shell is expanded previously changed Visibility only. If an
     // in-flight transition had left the new content at opacity 0, the result was a large blank pill.
     // Reset the full presentation state together so either layout is always immediately usable.
-    private static void SetModeContent(UIElement content, bool visible)
+    private static void SetModeContent(UIElement content, bool visible, bool deferReveal = false)
     {
         content.BeginAnimation(UIElement.OpacityProperty, null);
         content.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        content.Opacity = visible ? 1d : 0d;
-        content.IsHitTestVisible = visible;
+        content.Opacity = visible && !deferReveal ? 1d : 0d;
+        content.IsHitTestVisible = visible && !deferReveal;
+    }
+
+    private void SetPillAnimationCache(bool enabled, UIElement compactContent)
+    {
+        // Width/height animation still resizes the shell, but caching the already-laid-out
+        // content prevents repainting every timer control and text glyph on each frame.
+        ExpandedContent.CacheMode = enabled ? new BitmapCache() : null;
+        compactContent.CacheMode = enabled ? new BitmapCache() : null;
+        if (!enabled)
+        {
+            CompactContent.CacheMode = null;
+            StatsCompactContent.CacheMode = null;
+        }
     }
 
     private Grid ActiveCompactContent => _viewModel.IsStatsStyle ? StatsCompactContent : CompactContent;
-    private Grid ActiveExpandedContent => _viewModel.ShowQSurface ? QContent : _timerPanelOpen ? TimerPanelContent : ExpandedContent;
+    private Grid ActiveExpandedContent => _viewModel.ShowQSurface ? QContent : ExpandedContent;
 
     // Lay out the expanded subtree once at its destination size. The shell's rounded clip
     // reveals it during the morph without resizing a ScrollViewer and all its children per frame.
@@ -683,38 +857,41 @@ public partial class IslandWindow : Window
         _animatedShellShadow = null;
     }
 
-    // Morph the already-laid-out shell with a render transform. Animating Width/Height makes WPF
-    // measure and arrange the whole media/widget/Q tree for every frame, which is especially costly
-    // on the transparent window. Width/Height are committed only at the two ends of the morph.
+    // Animate the clipped shell itself while the expanded viewport stays pinned at its destination
+    // size. Scaling a transparent WPF Border exposed a full-width composition frame on some GPUs
+    // before its transform clock was applied, which read as a distracting flash during expansion.
     private void AnimatePill(bool animate)
     {
         var generation = ++_pillAnimationGeneration;
         var m = Metrics();
+        var expanded = _viewModel.IsExpanded;
+        var reduced = _viewModel.Settings.AnimationIntensity == AnimationIntensity.Reduced;
         // Make the destination surface measurable before computing its safe expanded bounds.
         // A Collapsed WPF element reports no desired size, which previously defeated the
-        // anti-clipping calculation on the first expansion.
-        ApplyVisualMode();
+        // anti-clipping calculation on the first expansion. Keep it transparent until its fade
+        // animation is ready, so WPF never presents a fully-visible intermediate frame.
+        ApplyVisualMode(animate && !reduced && expanded, animate && !reduced && !expanded);
         var (eW, eH) = ExpandedPillSize();
-        var targetW = _timerPanelOpen ? TimerPanelWidth : _viewModel.IsExpanded ? eW : m.cW;
-        var targetH = _timerPanelOpen ? TimerPanelHeight : _viewModel.IsExpanded ? eH : m.cH;
-        if (_viewModel.IsExpanded || _timerPanelOpen) SizeExpandedViewport(targetW, targetH);
-        var reduced = _viewModel.Settings.AnimationIntensity == AnimationIntensity.Reduced;
-        PillScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
-        PillScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
-        PillScale.ScaleX = PillScale.ScaleY = 1d;
-        var expanded = _viewModel.IsExpanded || _timerPanelOpen;
+        var targetW = _viewModel.IsExpanded ? eW : m.cW;
+        var targetH = _viewModel.IsExpanded ? eH : m.cH;
+        if (_viewModel.IsExpanded) SizeExpandedViewport(targetW, targetH);
         var compactContent = ActiveCompactContent;
         var expandedContent = ActiveExpandedContent;
+        var currentWidth = Math.Max(1d, GlassShell.ActualWidth);
+        var currentHeight = Math.Max(1d, GlassShell.ActualHeight);
 
         if (!animate || reduced)
         {
+            SetPillAnimationCache(enabled: false, compactContent);
             GlassShell.BeginAnimation(WidthProperty, null);
             GlassShell.BeginAnimation(HeightProperty, null);
+            GlassShell.BeginAnimation(UIElement.OpacityProperty, null);
             PillScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
             PillScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
             PillScale.ScaleX = PillScale.ScaleY = 1d;
             GlassShell.Width = targetW;
             GlassShell.Height = targetH;
+            GlassShell.Opacity = 1d;
             ApplyVisualMode();
             _expandAnimating = false;
             RestorePillShadow();
@@ -722,13 +899,22 @@ public partial class IslandWindow : Window
             return;
         }
 
-        var duration = TimeSpan.FromMilliseconds(
-            _viewModel.Settings.AnimationIntensity == AnimationIntensity.Expressive ? 340d : 250d);
+        // Expansion covers the full compact-to-editor distance. Give it enough time for the
+        // compositor to render a visibly fluid sequence of frames instead of making the first
+        // few frames carry most of a 900x600 resize. Collapse stays quick and familiar.
+        var duration = expanded
+            ? TimeSpan.FromMilliseconds(_viewModel.Settings.AnimationIntensity == AnimationIntensity.Expressive ? 420d : 340d)
+            : TimeSpan.FromMilliseconds(_viewModel.Settings.AnimationIntensity == AnimationIntensity.Expressive ? 280d : 210d);
+        // Keep the shell dimensions monotonic. A BackEase on the actual width made the island
+        // overshoot horizontally, producing the wide flash visible in the frame captures before
+        // it settled back to the intended size. Apple-like motion here comes from a fast ease-out,
+        // while the content fade provides the softer handoff.
         IEasingFunction ease = expanded
-            ? new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.45 }
-            : new QuinticEase { EasingMode = EasingMode.EaseOut };
+            ? new QuinticEase { EasingMode = EasingMode.EaseOut }
+            : new CubicEase { EasingMode = EasingMode.EaseInOut };
 
         _expandAnimating = true;
+        SetPillAnimationCache(enabled: true, compactContent);
         UseFastPillShadow();
         if (!_loggedAnimationStart)
         {
@@ -736,41 +922,49 @@ public partial class IslandWindow : Window
             _log.Info($"Real island animation started: expanded={expanded}, from={GlassShell.ActualWidth:0.#}x{GlassShell.ActualHeight:0.#}, target={targetW:0.#}x{targetH:0.#}, duration={duration.TotalMilliseconds:0}ms");
         }
 
-        var expandedWidth = Math.Max(targetW, eW);
-        var expandedHeight = Math.Max(targetH, eH);
-        var startScaleX = expanded ? Math.Clamp(m.cW / expandedWidth, 0.1, 1) : 1d;
-        var startScaleY = expanded ? Math.Clamp(m.cH / expandedHeight, 0.1, 1) : 1d;
-        var endScaleX = expanded ? 1d : Math.Clamp(m.cW / expandedWidth, 0.1, 1);
-        var endScaleY = expanded ? 1d : Math.Clamp(m.cH / expandedHeight, 0.1, 1);
-
-        // Keep the shell at its expanded layout bounds while collapsing so the scaled visual is
-        // not clipped by a compact Border before the transform reaches its endpoint.
+        // Freeze an interrupted morph at its currently rendered bounds, then continue from there.
+        // This keeps rapid pointer reversals smooth without a scale reset or a full-width flash.
+        PillScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        PillScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+        PillScale.ScaleX = PillScale.ScaleY = 1d;
         GlassShell.BeginAnimation(WidthProperty, null);
         GlassShell.BeginAnimation(HeightProperty, null);
-        GlassShell.Width = expandedWidth;
-        GlassShell.Height = expandedHeight;
-        PillScale.ScaleX = startScaleX;
-        PillScale.ScaleY = startScaleY;
-        var scaleXAnimation = new DoubleAnimation(endScaleX, duration) { EasingFunction = ease };
-        var scaleYAnimation = new DoubleAnimation(endScaleY, duration) { EasingFunction = ease };
-        scaleYAnimation.Completed += (_, _) => FinishPillMorph(generation, targetW, targetH, expanded);
-        PillScale.BeginAnimation(ScaleTransform.ScaleXProperty, scaleXAnimation);
-        PillScale.BeginAnimation(ScaleTransform.ScaleYProperty, scaleYAnimation);
+        GlassShell.BeginAnimation(UIElement.OpacityProperty, null);
+        GlassShell.Width = currentWidth;
+        GlassShell.Height = currentHeight;
+        GlassShell.Opacity = 1d;
+        var widthAnimation = new DoubleAnimation(targetW, duration) { EasingFunction = ease };
+        var heightAnimation = new DoubleAnimation(targetH, duration) { EasingFunction = ease };
+        heightAnimation.Completed += (_, _) => FinishPillMorph(generation, targetW, targetH, expanded);
+        GlassShell.BeginAnimation(WidthProperty, widthAnimation);
+        GlassShell.BeginAnimation(HeightProperty, heightAnimation);
 
         if (expanded)
         {
-            expandedContent.Opacity = 0d;
-            expandedContent.IsHitTestVisible = true;
-            var fade = new DoubleAnimation(0d, 1d, TimeSpan.FromMilliseconds(150))
+            // Preserve a compact visual while the rounded clip begins widening, then hand off
+            // promptly to the expanded surface. This avoids a black or full-width flash.
+            compactContent.Visibility = Visibility.Visible;
+            compactContent.Opacity = 1d;
+            compactContent.IsHitTestVisible = false;
+            // Fade the main expanded surface after the shell starts widening. The timer overlay
+            // has its own animation and is never mounted in this tree.
+            ExpandedContent.Opacity = 0d;
+            ExpandedContent.IsHitTestVisible = false;
+            var fade = new DoubleAnimation(0d, 1d, TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.56))
             {
-                BeginTime = TimeSpan.FromMilliseconds(150)
+                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.12),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
             };
-            expandedContent.BeginAnimation(UIElement.OpacityProperty, fade);
+            ExpandedContent.BeginAnimation(UIElement.OpacityProperty, fade);
+            compactContent.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0d, TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.34))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            });
         }
         else
         {
-            // Keep the expanded surface mounted while it shrinks. Switching to the compact tree
-            // before the transform starts makes collapse look like a clipped content replacement.
+            // Keep the expanded surface mounted while the shell narrows. Switching to the compact
+            // tree before the animation starts makes collapse look like a clipped replacement.
             // Cross-fade the compact tree near the end, then ApplyVisualMode commits the compact
             // layout after the shell reaches its final bounds.
             ExpandedViewport.Visibility = Visibility.Visible;
@@ -784,14 +978,18 @@ public partial class IslandWindow : Window
             compactContent.Opacity = 0d;
             compactContent.IsHitTestVisible = false;
 
-            var expandedFade = new DoubleAnimation(0d, duration)
+            // Reveal the compact island only near the end of the shrink. Showing it at the
+            // beginning makes the timer panel look like it turns into a large normal island
+            // before performing a second resize.
+            var fadeDuration = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.3);
+            var expandedFade = new DoubleAnimation(0d, fadeDuration)
             {
-                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.42),
+                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.2),
                 EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
             };
-            var compactFade = new DoubleAnimation(1d, duration)
+            var compactFade = new DoubleAnimation(1d, fadeDuration)
             {
-                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.55),
+                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.7),
                 EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
             };
             expandedContent.BeginAnimation(UIElement.OpacityProperty, expandedFade);
@@ -802,14 +1000,17 @@ public partial class IslandWindow : Window
     private void FinishPillMorph(int generation, double targetW, double targetH, bool expanded)
     {
         if (generation != _pillAnimationGeneration) return;
+        SetPillAnimationCache(enabled: false, CompactContent);
         PillScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
         PillScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
         PillScale.ScaleX = PillScale.ScaleY = 1d;
         GlassShell.BeginAnimation(WidthProperty, null);
         GlassShell.BeginAnimation(HeightProperty, null);
+        GlassShell.BeginAnimation(UIElement.OpacityProperty, null);
         GlassShell.Width = targetW;
         GlassShell.Height = targetH;
         ApplyVisualMode();
+        GlassShell.Opacity = 1d;
         _expandAnimating = false;
         RestorePillShadow();
         if (!_loggedAnimationCompletion)
@@ -819,6 +1020,283 @@ public partial class IslandWindow : Window
         }
         if (_viewModel.IsExpanded && !_timerPanelOpen) UpdateAutoGrow();
         LogAirPodsLayoutSnapshot();
+    }
+
+    private void ApplyTimerPanelHostLayout(bool animate)
+    {
+        var width = TimerPanelWidth;
+        var height = TimerPanelHeight;
+        TimerPanelHost.Width = width;
+        TimerPanelHost.Height = height;
+        TimerPanelContent.Height = Math.Max(180d, height - 44d);
+        TimerPanelContent.VerticalAlignment = VerticalAlignment.Top;
+        TimerTabContent.Height = AlarmTabContent.Height = StopwatchTabContent.Height = Math.Max(100d, height - 216d);
+
+        if (_timerPanelOpen)
+        {
+            if (!_timerPanelHostShown)
+                BeginTimerPanelHostOpen(animate);
+            else if (!_timerPanelHostAnimating && !_timerPanelClosing)
+                SetTimerPanelHostSettled();
+            return;
+        }
+
+        if (!_timerPanelHostShown)
+            SetTimerPanelHostHidden();
+    }
+
+    private void BeginTimerPanelHostOpen(bool animate)
+    {
+        var generation = ++_timerPanelAnimationGeneration;
+        var reversing = _timerPanelClosing && _timerPanelHostShown;
+        var currentScaleX = TimerPanelScale.ScaleX;
+        var currentScaleY = TimerPanelScale.ScaleY;
+        var currentTranslateX = TimerPanelTranslate.X;
+        var currentContentOpacity = TimerPanelContent.Opacity;
+        var currentCornerRadius = TimerPanelHost.CornerRadius;
+
+        StopTimerPanelHostAnimations(preserveCurrent: reversing);
+        _timerPanelClosing = false;
+        _timerPanelHostShown = true;
+        _timerPanelHostAnimating = true;
+        TimerPanelHost.Visibility = Visibility.Visible;
+        TimerPanelContent.Visibility = Visibility.Visible;
+        TimerPanelContent.BeginAnimation(UIElement.OpacityProperty, null);
+        TimerPanelContent.Opacity = reversing ? currentContentOpacity : 0d;
+        TimerPanelHost.Opacity = 1d;
+        TimerPanelHost.CornerRadius = reversing
+            ? currentCornerRadius
+            : new CornerRadius(TimerPanelMorphCornerRadius);
+        TimerPanelHost.IsHitTestVisible = false;
+        TimerPanelContent.IsHitTestVisible = false;
+
+        var targetWidth = Math.Max(1d, TimerPanelHost.Width);
+        var targetHeight = Math.Max(1d, TimerPanelHost.Height);
+        var orbSize = Math.Clamp(CompactTimerOrb.Width, 38d, 62d);
+        var orbOffset = TimerOrbTranslate.X;
+        var startScaleX = reversing ? currentScaleX : Math.Clamp(orbSize / targetWidth, 0.025d, 1d);
+        var startScaleY = reversing ? currentScaleY : Math.Clamp(orbSize / targetHeight, 0.025d, 1d);
+        var startTranslateX = reversing ? currentTranslateX : orbOffset;
+
+        if (!animate || _viewModel.IsReducedMotion)
+        {
+            SetTimerPanelHostSettled();
+            return;
+        }
+
+        TimerPanelScale.ScaleX = startScaleX;
+        TimerPanelScale.ScaleY = startScaleY;
+        TimerPanelTranslate.X = startTranslateX;
+        var duration = TimeSpan.FromMilliseconds(
+            _viewModel.Settings.AnimationIntensity == AnimationIntensity.Expressive ? 420d : 340d);
+        var ease = new QuinticEase { EasingMode = EasingMode.EaseOut };
+        TimerPanelScale.BeginAnimation(ScaleTransform.ScaleXProperty,
+            new DoubleAnimation(1d, duration) { EasingFunction = ease });
+        TimerPanelTranslate.BeginAnimation(TranslateTransform.XProperty,
+            new DoubleAnimation(0d, duration) { EasingFunction = ease });
+        TimerPanelScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateTimerPanelOpenAnimation(duration, ease, generation));
+        var cornerDuration = TimeSpan.FromMilliseconds(
+            Math.Min(TimerPanelCornerMorphDuration, duration.TotalMilliseconds));
+        TimerPanelHost.BeginAnimation(Border.CornerRadiusProperty,
+            new CornerRadiusAnimation(
+                TimerPanelHost.CornerRadius,
+                new CornerRadius(TimerPanelNormalCornerRadius),
+                cornerDuration));
+        TimerPanelContent.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(TimerPanelContent.Opacity, 1d, TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.55))
+            {
+                BeginTime = TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.18),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
+    }
+
+    private DoubleAnimation CreateTimerPanelOpenAnimation(TimeSpan duration, IEasingFunction ease, int generation)
+    {
+        var animation = new DoubleAnimation(1d, duration) { EasingFunction = ease };
+        animation.Completed += (_, _) => FinishTimerPanelHostOpen(generation);
+        return animation;
+    }
+
+    private void FinishTimerPanelHostOpen(int generation)
+    {
+        if (generation != _timerPanelAnimationGeneration || !_timerPanelOpen || _timerPanelClosing) return;
+        SetTimerPanelHostSettled();
+        _log.Info("Timer panel orb morph opened");
+    }
+
+    private void BeginTimerPanelHostClose()
+    {
+        if (!_timerPanelHostShown) return;
+
+        var generation = ++_timerPanelAnimationGeneration;
+        var currentScaleX = TimerPanelScale.ScaleX;
+        var currentScaleY = TimerPanelScale.ScaleY;
+        var currentTranslateX = TimerPanelTranslate.X;
+        var currentContentOpacity = TimerPanelContent.Opacity;
+        var currentCornerRadius = TimerPanelHost.CornerRadius;
+        StopTimerPanelHostAnimations(preserveCurrent: true);
+        _timerPanelClosing = true;
+        _timerPanelHostAnimating = true;
+        TimerPanelHost.Visibility = Visibility.Visible;
+        TimerPanelContent.Visibility = Visibility.Visible;
+        TimerPanelHost.IsHitTestVisible = false;
+        TimerPanelContent.IsHitTestVisible = false;
+        TimerPanelContent.BeginAnimation(UIElement.OpacityProperty, null);
+        TimerPanelContent.Opacity = currentContentOpacity;
+
+        var orbSize = Math.Clamp(CompactTimerOrb.Width, 38d, 62d);
+        var targetScaleX = Math.Clamp(orbSize / Math.Max(1d, TimerPanelHost.Width), 0.025d, 1d);
+        var targetScaleY = Math.Clamp(orbSize / Math.Max(1d, TimerPanelHost.Height), 0.025d, 1d);
+        var duration = TimeSpan.FromMilliseconds(
+            _viewModel.Settings.AnimationIntensity == AnimationIntensity.Expressive ? 300d : 230d);
+        if (_viewModel.IsReducedMotion)
+        {
+            FinishTimerPanelHostClose(generation);
+            return;
+        }
+
+        TimerPanelScale.ScaleX = currentScaleX;
+        TimerPanelScale.ScaleY = currentScaleY;
+        TimerPanelTranslate.X = currentTranslateX;
+        var ease = new CubicEase { EasingMode = EasingMode.EaseInOut };
+        TimerPanelScale.BeginAnimation(ScaleTransform.ScaleXProperty,
+            new DoubleAnimation(targetScaleX, duration) { EasingFunction = ease });
+        TimerPanelTranslate.BeginAnimation(TranslateTransform.XProperty,
+            new DoubleAnimation(TimerOrbTranslate.X, duration) { EasingFunction = ease });
+        var closeAnimation = new DoubleAnimation(targetScaleY, duration) { EasingFunction = ease };
+        closeAnimation.Completed += (_, _) => FinishTimerPanelHostClose(generation);
+        TimerPanelScale.BeginAnimation(ScaleTransform.ScaleYProperty, closeAnimation);
+        var cornerDuration = TimeSpan.FromMilliseconds(
+            Math.Min(TimerPanelCornerMorphDuration, duration.TotalMilliseconds));
+        TimerPanelHost.BeginAnimation(Border.CornerRadiusProperty,
+            new CornerRadiusAnimation(
+                currentCornerRadius,
+                new CornerRadius(TimerPanelMorphCornerRadius),
+                cornerDuration));
+        TimerPanelContent.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(currentContentOpacity, 0d, TimeSpan.FromMilliseconds(duration.TotalMilliseconds * 0.42))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
+            });
+    }
+
+    private void FinishTimerPanelHostClose(int generation)
+    {
+        if (generation != _timerPanelAnimationGeneration || !_timerPanelClosing) return;
+        SetTimerPanelHostHidden();
+        _timerPanelOpen = false;
+        _timerPanelClosing = false;
+        _viewModel.TimerEditorOpen = false;
+        _viewModel.InteractionProtected = IsKeyboardFocusWithin;
+        _position.ApplyWindowStyles(this, _viewModel.Settings, compact: true);
+        ApplyLayout(animate: false);
+        _log.Info("Timer panel orb morph closed");
+    }
+
+    private void SetTimerPanelHostSettled()
+    {
+        StopTimerPanelHostAnimations(preserveCurrent: false);
+        TimerPanelHost.Visibility = Visibility.Visible;
+        TimerPanelContent.Visibility = Visibility.Visible;
+        TimerPanelContent.BeginAnimation(UIElement.OpacityProperty, null);
+        TimerPanelContent.Opacity = 1d;
+        TimerPanelHost.Opacity = 1d;
+        TimerPanelScale.ScaleX = TimerPanelScale.ScaleY = 1d;
+        TimerPanelTranslate.X = TimerPanelTranslate.Y = 0d;
+        TimerPanelHost.IsHitTestVisible = true;
+        TimerPanelContent.IsHitTestVisible = true;
+        _timerPanelHostShown = true;
+        _timerPanelHostAnimating = false;
+    }
+
+    private void SetTimerPanelHostHidden()
+    {
+        StopTimerPanelHostAnimations(preserveCurrent: false);
+        TimerPanelHost.Visibility = Visibility.Collapsed;
+        TimerPanelHost.Opacity = 0d;
+        TimerPanelHost.IsHitTestVisible = false;
+        TimerPanelContent.Visibility = Visibility.Collapsed;
+        TimerPanelContent.IsHitTestVisible = false;
+        TimerPanelContent.BeginAnimation(UIElement.OpacityProperty, null);
+        TimerPanelContent.Opacity = 0d;
+        TimerPanelScale.ScaleX = TimerPanelScale.ScaleY = 1d;
+        TimerPanelTranslate.X = TimerPanelTranslate.Y = 0d;
+        _timerPanelHostShown = false;
+        _timerPanelHostAnimating = false;
+    }
+
+    private void StopTimerPanelHostAnimations(bool preserveCurrent)
+    {
+        var scaleX = TimerPanelScale.ScaleX;
+        var scaleY = TimerPanelScale.ScaleY;
+        var translateX = TimerPanelTranslate.X;
+        var translateY = TimerPanelTranslate.Y;
+        var contentOpacity = TimerPanelContent.Opacity;
+        var cornerRadius = TimerPanelHost.CornerRadius;
+        TimerPanelHost.BeginAnimation(UIElement.OpacityProperty, null);
+        TimerPanelContent.BeginAnimation(UIElement.OpacityProperty, null);
+        TimerPanelHost.BeginAnimation(Border.CornerRadiusProperty, null);
+        TimerPanelScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        TimerPanelScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+        TimerPanelTranslate.BeginAnimation(TranslateTransform.XProperty, null);
+        TimerPanelTranslate.BeginAnimation(TranslateTransform.YProperty, null);
+        if (preserveCurrent)
+        {
+            TimerPanelHost.Opacity = 1d;
+            TimerPanelScale.ScaleX = scaleX;
+            TimerPanelScale.ScaleY = scaleY;
+            TimerPanelTranslate.X = translateX;
+            TimerPanelTranslate.Y = translateY;
+            TimerPanelContent.Opacity = contentOpacity;
+            TimerPanelHost.CornerRadius = cornerRadius;
+        }
+        else
+        {
+            TimerPanelHost.Opacity = 0d;
+            TimerPanelScale.ScaleX = TimerPanelScale.ScaleY = 1d;
+            TimerPanelTranslate.X = TimerPanelTranslate.Y = 0d;
+            TimerPanelContent.Opacity = 0d;
+            TimerPanelHost.CornerRadius = new CornerRadius(TimerPanelNormalCornerRadius);
+        }
+    }
+
+    private sealed class CornerRadiusAnimation : AnimationTimeline
+    {
+        public CornerRadiusAnimation() { }
+
+        public CornerRadiusAnimation(CornerRadius from, CornerRadius to, TimeSpan duration)
+        {
+            From = from;
+            To = to;
+            Duration = new Duration(duration);
+        }
+
+        public CornerRadius From { get; set; }
+        public CornerRadius To { get; set; }
+
+        public override Type TargetPropertyType => typeof(CornerRadius);
+
+        protected override Freezable CreateInstanceCore() => new CornerRadiusAnimation
+        {
+            From = From,
+            To = To,
+            Duration = Duration
+        };
+
+        public override object GetCurrentValue(
+            object defaultOriginValue,
+            object defaultDestinationValue,
+            AnimationClock animationClock)
+        {
+            var progress = animationClock.CurrentProgress ?? 1d;
+            return new CornerRadius(
+                Lerp(From.TopLeft, To.TopLeft, progress),
+                Lerp(From.TopRight, To.TopRight, progress),
+                Lerp(From.BottomRight, To.BottomRight, progress),
+                Lerp(From.BottomLeft, To.BottomLeft, progress));
+        }
+
+        private static double Lerp(double from, double to, double progress) => from + ((to - from) * progress);
     }
 
     private void LogAirPodsLayoutSnapshot()
@@ -851,7 +1329,7 @@ public partial class IslandWindow : Window
         _idleTimer.Stop();
         SetDimmed(false);
         if (!_timerPanelOpen && _viewModel.Settings.ExpandOnHover && !_viewModel.Settings.ClickThroughWhenCompact)
-            _viewModel.IsExpanded = true;
+            RequestMainExpansion();
     }
 
     private void Pill_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
@@ -1114,9 +1592,20 @@ public partial class IslandWindow : Window
     {
         if (!_timerPanelOpen && _viewModel.IsCompact)
         {
-            _viewModel.IsExpanded = true;
+            RequestMainExpansion();
             e.Handled = true;
         }
+    }
+
+    private void RequestMainExpansion()
+    {
+        if (_timerPanelOpen || !_viewModel.IsCompact) return;
+        if (!_initialLayoutStabilized)
+        {
+            _mainExpansionPending = true;
+            return;
+        }
+        _viewModel.IsExpanded = true;
     }
 
     private void DragGrip_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1179,13 +1668,13 @@ public partial class IslandWindow : Window
 
     private void TimerButton_Click(object sender, RoutedEventArgs e)
     {
-        ShowTimerPanel();
+        ShowTimerPanel(pinOpen: true);
         e.Handled = true;
     }
 
     private void TimerOrb_Click(object sender, MouseButtonEventArgs e)
     {
-        ShowTimerPanel();
+        ShowTimerPanel(pinOpen: true);
         e.Handled = true;
     }
 
@@ -1193,18 +1682,98 @@ public partial class IslandWindow : Window
     {
         // The orb is a live activity affordance: hovering it should reveal the full
         // timer surface just like Apple's Dynamic Island, without requiring a click.
-        if (!_timerPanelOpen) ShowTimerPanel();
+        if (!_timerPanelOpen) ShowTimerPanel(pinOpen: false);
     }
 
     private void TimerPanel_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        // Keep the editor stable while typing or using a dropdown.
-        if (!IsKeyboardFocusWithin && Mouse.Captured is null) CloseTimerPanel();
+        TryAutoCloseTimerPanel();
     }
 
-    public void ShowTimerPanel()
+    private void TimerOrb_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
     {
+        // The orb sits above the shell: hovering it opens the panel without the pointer
+        // ever entering TimerPanelContent, so its leave must also arm the auto-close.
+        TryAutoCloseTimerPanel();
+    }
+
+    private void TryAutoCloseTimerPanel()
+    {
+        if (!_timerPanelOpen)
+        {
+            _timerPanelLeaveTimer.Stop();
+            return;
+        }
+
+        // A deliberate click owns the panel until the user closes it. Hover-opened panels
+        // still use the pointer-based auto-close path below.
+        if (_timerPanelPinnedByClick)
+        {
+            _timerPanelLeaveTimer.Stop();
+            return;
+        }
+
+        // WPF can keep the transparent overlay under the pointer and never deliver the
+        // subsequent MouseLeave. Read the OS cursor position instead, which also works
+        // after the pointer has left the transparent window entirely.
+        if (IsPointerOverGlassShell() || IsPointerOverTimerPanelHost() || CompactTimerOrb.IsMouseOver)
+        {
+            // Keep checking while the panel is open. Stopping here loses the leave event
+            // in the transparent-overlay case that caused the panel to stick open.
+            if (!_timerPanelLeaveTimer.IsEnabled) _timerPanelLeaveTimer.Start();
+            return;
+        }
+
+        // A captured mouse means a dropdown popup or scrollbar drag is still active.
+        if (Mouse.Captured is not null)
+        {
+            if (!_timerPanelLeaveTimer.IsEnabled) _timerPanelLeaveTimer.Start();
+            return;
+        }
+
+        _timerPanelLeaveTimer.Stop();
+        System.Windows.Input.Keyboard.ClearFocus();
+        CloseTimerPanel();
+    }
+
+    private bool IsPointerOverGlassShell()
+    {
+        if (GlassShell.ActualWidth <= 0 || GlassShell.ActualHeight <= 0) return true;
+        if (!Interop.NativeMethods.GetCursorPos(out var cursor)) return true;
+
+        var point = GlassShell.PointFromScreen(new System.Windows.Point(cursor.X, cursor.Y));
+        return point.X >= 0 && point.Y >= 0
+            && point.X <= GlassShell.ActualWidth
+            && point.Y <= GlassShell.ActualHeight;
+    }
+
+    private bool IsPointerOverTimerPanelHost()
+    {
+        if (TimerPanelHost.Visibility != Visibility.Visible || TimerPanelHost.ActualWidth <= 0 || TimerPanelHost.ActualHeight <= 0)
+            return false;
+        if (!Interop.NativeMethods.GetCursorPos(out var cursor)) return true;
+
+        var point = TimerPanelHost.PointFromScreen(new System.Windows.Point(cursor.X, cursor.Y));
+        return point.X >= 0 && point.Y >= 0
+            && point.X <= TimerPanelHost.ActualWidth
+            && point.Y <= TimerPanelHost.ActualHeight;
+    }
+
+    public void ShowTimerPanel(bool pinOpen = false)
+    {
+        if (pinOpen) _timerPanelPinnedByClick = true;
+
+        if (_timerPanelClosing)
+        {
+            _timerPanelLeaveTimer.Stop();
+            BeginTimerPanelHostOpen(animate: true);
+            if (!_timerPanelPinnedByClick) _timerPanelLeaveTimer.Start();
+            return;
+        }
+        if (_timerPanelOpen) return;
+
         _collapseTimer.Stop();
+        _timerPanelLeaveTimer.Stop();
         _idleTimer.Stop();
         SetDimmed(false);
         if (_viewModel.IsExpanded)
@@ -1213,7 +1782,10 @@ public partial class IslandWindow : Window
             _viewModel.IsExpanded = false;
             _suppressExpandedAnimation = false;
         }
-        _timerPanelOpen = true; _viewModel.TimerEditorOpen = true; _viewModel.InteractionProtected = true;
+        _timerPanelOpen = true;
+        _viewModel.TimerEditorOpen = true;
+        _viewModel.InteractionProtected = true;
+        if (!_timerPanelPinnedByClick) _timerPanelLeaveTimer.Start();
         ShowTimerTab();
         ForceShow();
         _position.ApplyWindowStyles(this, _viewModel.Settings, compact: false);
@@ -1229,10 +1801,12 @@ public partial class IslandWindow : Window
 
     public void CloseTimerPanel()
     {
-        if (!_timerPanelOpen) return;
-        _timerPanelOpen = false; _viewModel.TimerEditorOpen = false; _viewModel.InteractionProtected = IsKeyboardFocusWithin;
-        _position.ApplyWindowStyles(this, _viewModel.Settings, compact: true);
-        ApplyLayout(animate: true);
+        _timerPanelLeaveTimer.Stop();
+        _timerPanelPinnedByClick = false;
+        if (!_timerPanelOpen || _timerPanelClosing) return;
+        // Keep TimerEditorOpen true until the host has finished shrinking. This keeps the compact orb
+        // hidden underneath the panel and lets the separate host land exactly on its orb geometry.
+        BeginTimerPanelHostClose();
         _log.Info("In-island timer panel closed");
     }
 
@@ -1250,31 +1824,77 @@ public partial class IslandWindow : Window
 
     private void AlarmTab_Click(object sender, RoutedEventArgs e)
     {
+        ShowAlarmTab();
+        e.Handled = true;
+    }
+
+    private void StopwatchTab_Click(object sender, RoutedEventArgs e)
+    {
+        ShowStopwatchTab();
+        e.Handled = true;
+    }
+
+    private void TimerViewModel_ShowAlarmTabRequested(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(ShowAlarmTab);
+    }
+
+    private void ShowAlarmTab()
+    {
         TimerTabContent.Visibility = Visibility.Collapsed;
         AlarmTabContent.Visibility = Visibility.Visible;
-        TimerTabButton.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0, 0, 0, 0));
-        TimerTabButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
-        TimerTabButton.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x9C, 0x9C, 0xA2));
-        AlarmTabButton.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x26));
-        AlarmTabButton.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x39, 0x39, 0x3E));
-        AlarmTabButton.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x66, 0xAD, 0xFF));
+        StopwatchTabContent.Visibility = Visibility.Collapsed;
+        SetTimerTabVisual(TimerTabButton, false);
+        SetTimerTabVisual(AlarmTabButton, true);
+        SetTimerTabVisual(StopwatchTabButton, false);
+        TimerHeaderIcon.Text = "\uE7B7";
+        TimerHeaderTitle.Text = "Alarm";
+        TimerHeaderSubtitle.Text = "Wake up. Do more.";
         TimerFooterText.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(TimerAlarmViewModel.AlarmStateText)));
-        e.Handled = true;
     }
 
     private void ShowTimerTab()
     {
         TimerTabContent.Visibility = Visibility.Visible;
         AlarmTabContent.Visibility = Visibility.Collapsed;
-        TimerTabButton.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x26));
-        TimerTabButton.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x39, 0x39, 0x3E));
-        TimerTabButton.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x66, 0xAD, 0xFF));
-        AlarmTabButton.Background = System.Windows.Media.Brushes.Transparent;
-        AlarmTabButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
-        AlarmTabButton.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x9C, 0x9C, 0xA2));
+        StopwatchTabContent.Visibility = Visibility.Collapsed;
+        SetTimerTabVisual(TimerTabButton, true);
+        SetTimerTabVisual(AlarmTabButton, false);
+        SetTimerTabVisual(StopwatchTabButton, false);
+        TimerHeaderIcon.Text = "\uE916";
+        TimerHeaderTitle.Text = "Timer";
+        TimerHeaderSubtitle.Text = "Set a duration. Stay focused.";
         TimerFooterText.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(TimerAlarmViewModel.TimerFooterText)));
     }
+
+    private void ShowStopwatchTab()
+    {
+        TimerTabContent.Visibility = Visibility.Collapsed;
+        AlarmTabContent.Visibility = Visibility.Collapsed;
+        StopwatchTabContent.Visibility = Visibility.Visible;
+        SetTimerTabVisual(TimerTabButton, false);
+        SetTimerTabVisual(AlarmTabButton, false);
+        SetTimerTabVisual(StopwatchTabButton, true);
+        TimerHeaderIcon.Text = "\uE916";
+        TimerHeaderTitle.Text = "Stopwatch";
+        TimerHeaderSubtitle.Text = "Focus. Create. Get things done.";
+        TimerFooterText.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(TimerAlarmViewModel.StopwatchText)));
+    }
+
+    private void SetTimerTabVisual(System.Windows.Controls.Button button, bool active)
+    {
+        button.Background = active
+            ? _viewModel.AccentBrush
+            : System.Windows.Media.Brushes.Transparent;
+        button.BorderBrush = active
+            ? _viewModel.AccentBrush
+            : System.Windows.Media.Brushes.Transparent;
+        button.Foreground = active
+            ? System.Windows.Media.Brushes.White
+            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x9C, 0xB0, 0xCE));
+    }
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettingsRequested?.Invoke(this, EventArgs.Empty);
+    private void QSettingsButton_Click(object sender, RoutedEventArgs e) => OpenQSettingsRequested?.Invoke(this, EventArgs.Empty);
     private void RecenterButton_Click(object sender, RoutedEventArgs e) => RecenterRequested?.Invoke(this, EventArgs.Empty);
 
     private void QButton_Click(object sender, RoutedEventArgs e)
@@ -1392,13 +2012,13 @@ public partial class IslandWindow : Window
         if (QPromptBox is null || QPromptPlaceholder is null || QSendButton is null) return;
         var hasPrompt = !string.IsNullOrWhiteSpace(QPromptBox.Text);
         QPromptPlaceholder.Visibility = hasPrompt ? Visibility.Collapsed : Visibility.Visible;
-        QSendButton.IsEnabled = hasPrompt;
+        QSendButton.IsEnabled = hasPrompt && !_viewModel.QCanStop;
     }
 
     private async Task SubmitQPromptAsync()
     {
         var prompt = QPromptBox.Text.Trim();
-        if (prompt.Length == 0) return;
+        if (prompt.Length == 0 || _viewModel.QCanStop) return;
         _qFollowLatest = true;
         QPromptBox.Clear();
         UpdateQPromptComposer();

@@ -11,14 +11,16 @@ using DynamicIsland.Windows.Services;
 using DynamicIsland.Windows.Services.Q;
 using DynamicIsland.Windows.ViewModels;
 using DynamicIsland.Windows.Views;
+using ThemeMode = DynamicIsland.Windows.Models.ThemeMode;
 
 namespace DynamicIsland.Windows.Infrastructure;
 
 // Opt-in native fixture harness. No media, Bluetooth, microphone, screen capture or provider service is started.
 internal static class UpgradeVerification
 {
-    public static async Task RunAsync()
+    public static async Task RunAsync(bool providersOnly = false, bool comparisonOnly = false)
     {
+        providersOnly |= comparisonOnly;
         if (!AppDataPaths.IsPreview) throw new InvalidOperationException("Verification requires ISLAND_PREVIEW=1.");
         Directory.CreateDirectory(AppDataPaths.Root);
         var output = Path.Combine(AppDataPaths.Root, "captures"); Directory.CreateDirectory(output);
@@ -34,10 +36,14 @@ internal static class UpgradeVerification
         using var theme = new ThemeService(); using var weather = new WeatherService(log); using var monitor = new SystemMonitorService();
         using var spectrum = new AudioSpectrumService(log); using var stocks = new StocksService(log); using var calendar = new CalendarService(log);
         using var notifications = new NotificationListenerService(log); using var privacy = new PrivacySensorService(log);
-        var history = new NotificationHistoryService(log); using var q = new QSessionController(new QProviderRegistry([]));
+        var fixtures = new[] { "openai", "gemini", "anthropic", "codex", "ollama" }.Select(id => new ProviderFixture(id)).ToArray();
+        if (providersOnly) settings.QSelectedModel = "openai-default";
+        var registry = new QProviderRegistry(providersOnly ? fixtures : []);
+        IQSecretStore secrets = providersOnly ? new DpapiSecretStore(log) : new FakeSecrets();
+        var history = new NotificationHistoryService(log); using var q = new QSessionController(registry);
         var screen = new ScreenContextService(log);
         using var vm = new IslandViewModel(settings, media, audio, battery, clock, timers, theme, weather, monitor, spectrum, stocks,
-            calendar, notifications, privacy, history, q, new FakeScreen(), new FakeSpeech(), new FakeSecrets());
+            calendar, notifications, privacy, history, q, new FakeScreen(), new FakeSpeech(), secrets, qProviders: registry);
         using var timerVm = new TimerAlarmViewModel(timers, false);
         var position = new WindowPositionService();
         var window = new IslandWindow(vm, timerVm, position, settingsService, log, screen)
@@ -72,6 +78,14 @@ internal static class UpgradeVerification
                 var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
                 using var file = File.Create(Path.Combine(output, $"{name}-{scale * 100:0}.png")); encoder.Save(file);
             }
+        }
+        if (providersOnly)
+        {
+            if (comparisonOnly) await VerifyComparisonAsync(settings, settingsService, vm, window, q, secrets, position, Check, Capture, output);
+            else await VerifyProvidersAsync(settings, settingsService, log, vm, window, q, secrets, registry, position, Check, Capture);
+            bindingLog.Flush(); File.WriteAllLines(Path.Combine(output, "checks.txt"), report);
+            window.Close(); PresentationTraceSources.DataBindingSource.Listeners.Remove(bindingLog);
+            return;
         }
         Invoke("OnMediaChanged", null, new MediaInfo { Title = "Midnight Drive — an intentionally long track title for layout verification", Artist = "Island Studio", SourceAppName = "Fixture player", PlaybackState = MediaPlaybackState.Playing, Duration = TimeSpan.FromMinutes(4), Position = TimeSpan.FromSeconds(90), CanPlayPause = true, CanSeek = true });
         Invoke("OnWeatherChanged", null, new WeatherInfo("72°", "\uE706", "Clear skies", "Indianapolis"));
@@ -206,8 +220,272 @@ internal static class UpgradeVerification
         bindingLog.Flush(); File.WriteAllLines(Path.Combine(output, "checks.txt"), report);
         window.Close(); PresentationTraceSources.DataBindingSource.Listeners.Remove(bindingLog);
     }
-    private sealed class FakeScreen : IQScreenContextService { public Task<QScreenContext?> CaptureAsync(nint window, DynamicIsland.Q.Core.QCaptureMode mode, CancellationToken token) => Task.FromResult<QScreenContext?>(null); }
+    private sealed class FakeScreen : IQScreenContextService
+    {
+        public async Task<QScreenContext?> CaptureAsync(nint window, DynamicIsland.Q.Core.QCaptureMode mode, CancellationToken token)
+        { await Task.Delay(25, token).ConfigureAwait(false); return null; }
+    }
     private sealed class FakeSpeech : IQSpeechInputService { public bool IsAvailable => false; public Task<string?> DictateAsync(CancellationToken token) => Task.FromResult<string?>(null); }
+    private static async Task VerifyProvidersAsync(AppSettings settings, SettingsService persistence, LoggingService log,
+        IslandViewModel vm, IslandWindow window, QSessionController q, IQSecretStore secrets, QProviderRegistry registry,
+        WindowPositionService position, Action<bool, string> check, Func<string, Task> capture)
+    {
+        using var codex = new AsyncDisposeAdapter(new CodexAppServerClient(log: log));
+        var account = new CodexAccountCoordinator(codex.Client, log);
+        var editor = new SettingsViewModel(settings, persistence, new StartupService(log), vm.ApplySettings,
+            () => { }, () => { }, secrets, registry, account);
+        vm.QProviderSelectionChanged += (_, _) => editor.RefreshQProviderControls();
+        var settingsWindow = new SettingsWindow(editor, vm) { Opacity = 0, ShowActivated = false };
+        settingsWindow.Show(); settingsWindow.OpenQSettings(); settingsWindow.UpdateLayout();
+        var previousTheme = settings.Theme;
+        editor.Theme = ThemeMode.Custom; editor.CustomThemeColorHex = "#123D38";
+        typeof(SettingsWindow).GetMethod("ShowSection", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(settingsWindow, ["appearance"]);
+        settingsWindow.UpdateLayout();
+        check(editor.IsCustomTheme && ((System.Windows.Controls.Button)settingsWindow.FindName("CustomThemeColorButton")).IsVisible,
+            "Custom theme reveals the color picker control in Appearance");
+        var appearanceBitmap = new RenderTargetBitmap((int)Math.Ceiling(settingsWindow.ActualWidth), (int)Math.Ceiling(settingsWindow.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+        appearanceBitmap.Render((Visual)settingsWindow.Content);
+        var appearanceEncoder = new PngBitmapEncoder(); appearanceEncoder.Frames.Add(BitmapFrame.Create(appearanceBitmap));
+        using (var file = File.Create(Path.Combine(AppDataPaths.Root, "captures", "custom-theme-settings.png"))) appearanceEncoder.Save(file);
+        editor.Theme = previousTheme; settingsWindow.OpenQSettings();
+        var keyBox = (PasswordBox)settingsWindow.FindName("QApiKeyBox");
+        void ClickKey(string handler) => typeof(SettingsWindow).GetMethod(handler, BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(settingsWindow, [settingsWindow, new RoutedEventArgs()]);
+        foreach (var id in new[] { "openai", "gemini", "anthropic" })
+        {
+            editor.QSelectedProvider = id;
+            keyBox.Password = "fixture-only-key-" + id;
+            ClickKey("SaveQApiKey_Click");
+            check(keyBox.Password.Length == 0 && secrets.Get(id) == "fixture-only-key-" + id, id + ": key saved through editor and input cleared");
+        }
+        foreach (var id in new[] { "openai", "gemini", "anthropic" })
+            check(new DpapiSecretStore(log).Get(id) == "fixture-only-key-" + id, id + ": independently encrypted key survives store reload");
+        check(!System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(AppDataPaths.Root, "q-secrets.dat"))).Contains("fixture-only-key"),
+            "Credentials are not plaintext on disk");
+        editor.QSelectedProvider = "openai";
+        keyBox.Password = "unsaved-draft";
+        editor.QSelectedProvider = "gemini";
+        check(keyBox.Password.Length == 0 && secrets.Get("openai") == "fixture-only-key-openai", "Changing provider discards only unsaved input, not saved keys");
+        await q.BeginAsync(QMode.Ask, settings.QSelectedProvider, settings.QSelectedModel, null);
+        vm.IsExpanded = true; window.ApplySettings(); window.UpdateLayout();
+        var selector = (System.Windows.Controls.ComboBox)window.FindName("QProviderSelector");
+        var models = (System.Windows.Controls.ComboBox)window.FindName("QModelSelector");
+        var prompt = (System.Windows.Controls.TextBox)window.FindName("QPromptBox");
+        prompt.Text = "Unsent draft survives provider switches";
+        foreach (var id in new[] { "openai", "gemini", "anthropic" })
+        {
+            selector.SelectedValue = id;
+            await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            check(vm.QSelectedProvider == id && editor.QSelectedProvider == id, id + ": panel selection reaches both view models");
+            check(vm.QSelectedModel == id + "-default" && Equals(models.SelectedItem, vm.QSelectedModel), id + ": model dropdown updates to the correct provider");
+            vm.QSelectedModel = id + "-custom"; vm.QReasoningEffort = "high";
+            await vm.SubmitQAsync("Synthetic fixture question");
+            await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            var fixture = (ProviderFixture)registry.Find(id)!;
+            check(fixture.LastCredential == "fixture-only-key-" + id && fixture.LastModel == id + "-custom", id + ": request uses only that provider's key and model");
+        }
+        selector.SelectedValue = "gemini";
+        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        check(vm.QSelectedModel == "gemini-custom" && vm.QReasoningEffort == "high", "Switching back restores custom model and effort with live bindings");
+        check(prompt.Text == "Unsent draft survives provider switches", "Provider switch preserves the unsent prompt");
+        await persistence.SaveAsync(settings);
+        var reloaded = await persistence.LoadAsync();
+        check(reloaded.QSelectedProvider == "gemini" && reloaded.QSelectedModel == "gemini-custom"
+            && reloaded.QProviderPreferences["openai"].Model == "openai-custom", "Provider and per-provider models persist across reload");
+        check(!File.ReadAllText(persistence.SettingsPath).Contains("fixture-only-key"), "Settings export contains no API keys");
+        ClickKey("RemoveQApiKey_Click");
+        check(secrets.Get("gemini") is null && secrets.Get("openai") is not null && secrets.Get("anthropic") is not null,
+            "Remove key affects only the selected provider");
+        editor.QSelectedProvider = "codex"; check(!editor.QShowApiKey, "Codex keeps account sign-in instead of API keys");
+        editor.QSelectedProvider = "ollama"; check(!editor.QShowApiKey, "Ollama remains keyless");
+        editor.QSelectedProvider = "gemini";
+        settings.QShortcuts = [new() { Name = "MCQ/OPEN", Prompt = "Fixture" }, new() { Name = "Explain", Prompt = "Fixture" }, new() { Name = "?", Prompt = "Fixture" }];
+        vm.ApplySettings();
+        void CheckToolbar()
+        {
+            var actions = (ScrollViewer)window.FindName("QQuickActions");
+            var toolbar = (FrameworkElement)window.FindName("QToolbar");
+            var top = actions.TranslatePoint(new System.Windows.Point(), toolbar);
+            check(actions.ActualHeight >= 36 && top.Y + actions.ActualHeight <= toolbar.ActualHeight + 1,
+                "Entire shortcut row fits inside the toolbar");
+            var promptTop = prompt.TranslatePoint(new System.Windows.Point(), toolbar);
+            check(top.Y + actions.ActualHeight + 10 <= promptTop.Y, "Shortcut buttons have clearance above the composer");
+        }
+        position.VerificationWorkArea = (1920, 1080); window.ApplySettings(); await capture("q-provider-selector");
+        CheckToolbar();
+        selector.IsDropDownOpen = true; window.UpdateLayout(); selector.IsDropDownOpen = false;
+        position.VerificationWorkArea = (640, 480); window.ApplySettings(); await capture("q-provider-narrow");
+        CheckToolbar();
+        var shell = (FrameworkElement)window.FindName("GlassShell");
+        var composer = prompt.TranslatePoint(new System.Windows.Point(), shell);
+        check(composer.Y + prompt.ActualHeight <= shell.ActualHeight + 1, "Provider controls leave composer reachable on narrow screens");
+        check(selector.ActualWidth > 0 && selector.TranslatePoint(new System.Windows.Point(), shell).X >= 0, "Provider selector remains reachable on narrow screens");
+        settings.QShortcuts = Enumerable.Range(1, 12).Select(i => new QShortcut { Name = "Quick action " + i, Prompt = "Fixture" }).ToList();
+        vm.ApplySettings(); window.UpdateLayout();
+        var overflow = (ScrollViewer)window.FindName("QQuickActions");
+        overflow.ScrollToRightEnd(); await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        check(overflow.HorizontalOffset > 0, "Overflow shortcuts are reachable by horizontal scrolling");
+        CheckToolbar();
+        settingsWindow.Close();
+    }
+
+    private static async Task VerifyComparisonAsync(AppSettings settings, SettingsService persistence, IslandViewModel vm,
+        IslandWindow window, QSessionController session, IQSecretStore secrets, WindowPositionService position,
+        Action<bool, string> check, Func<string, Task> capture, string output)
+    {
+        secrets.Set("gemini", "fixture-gemini"); secrets.Set("openai", "fixture-openai");
+        settings.QShortcuts = [new() { Name = "Repeat activation", Prompt = "Explain binary search in plain English." }];
+        settings.QAutoExpandIsland = false;
+        foreach (var compare in new[] { false, true })
+        {
+            vm.QCompareEnabled = compare;
+            vm.QSelectedProvider = "gemini"; vm.QCompareProvider = "openai";
+            for (var repeat = 0; repeat < 6; repeat++)
+            {
+                if (repeat == 2) vm.ClearQ();
+                await vm.StartQAsync(default, "Repeat activation");
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                check(vm.QState == QRunState.Complete && (compare ? vm.QLeftCanCopy && vm.QRightCanCopy : vm.QCanCopyResponse),
+                    $"Shortcut activation {repeat + 1} completes after asynchronous capture (Compare={compare})");
+            }
+            vm.ClearQ();
+            var closedActivation = vm.StartQAsync(default, "Repeat activation");
+            vm.ClearQ();
+            await closedActivation;
+            check(vm.QState == QRunState.Idle, $"Closing during capture does not reopen Q (Compare={compare})");
+            var stoppedActivation = vm.StartQAsync(default, "Repeat activation");
+            vm.CancelQ();
+            await stoppedActivation;
+            check(!vm.QCanStop && vm.QState == QRunState.Cancelled, $"Stopping capture exits busy state (Compare={compare})");
+            var superseded = vm.StartQAsync(default, "Repeat activation");
+            var newest = vm.StartQAsync(default, "Repeat activation");
+            await Task.WhenAll(superseded, newest);
+            await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            check(vm.QState == QRunState.Complete, $"Rapid repeated activation uses the newest request (Compare={compare})");
+            vm.ClearQ();
+        }
+        settings.QAutoExpandIsland = true;
+        await session.BeginAsync(QMode.Ask, "openai", "openai-default", null);
+        var toggle = (System.Windows.Controls.CheckBox)window.FindName("QCompareToggle");
+        toggle.IsChecked = true;
+        vm.QSelectedProvider = "gemini"; vm.QCompareProvider = "openai";
+        var initialComparison = (QComparisonView)window.FindName("QComparisonPanel");
+        var providerControl = (System.Windows.Controls.ComboBox)initialComparison.FindName("SecondProvider");
+        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        providerControl.SelectedItem = vm.QCompareProviderOptions.First(p => p.Id == "anthropic");
+        check(vm.QCompareProvider == "anthropic", "Second provider can be changed through its UI selector");
+        providerControl.SelectedItem = vm.QCompareProviderOptions.First(p => p.Id == "openai");
+        check(vm.QCompareEnabled && vm.QCompareProvider != vm.QSelectedProvider, "Compare toggle binds and selects two distinct providers");
+        await vm.SubmitQAsync("Explain binary search in plain English.");
+        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        check(vm.QLeftLabel == "Gemini:" && vm.QRightLabel == "OAI:", "Collapsed labels match the selected providers");
+        check(vm.QLeftCompact == "Halve the search each step." && vm.QRightCompact == "Check the middle, then repeat.", "Both actual answers appear in compact lines");
+        check(vm.QState == QRunState.Complete && vm.QLeftCanCopy && vm.QRightCanCopy, "Both provider responses complete independently and are copyable");
+        var originalRight = vm.QRightAnswer;
+        await vm.RetryComparisonAsync(false);
+        check(vm.QRightAnswer == originalRight, "Retrying one column preserves the other answer");
+        settings.QShortcuts = [new() { Name = "MCQ/OPEN", Prompt = "fixture" }, new() { Name = "Explain", Prompt = "fixture" }];
+        vm.ApplySettings(); position.VerificationWorkArea = (1920, 1080);
+        vm.IsExpanded = true; window.ApplySettings(); await capture("compare-expanded");
+        var comparison = (QComparisonView)window.FindName("QComparisonPanel");
+        check(comparison.IsVisible, "Expanded comparison panel is visible");
+        check(Equals(((System.Windows.Controls.ComboBox)comparison.FindName("SecondModel")).SelectedItem, vm.QCompareModel), "Second model stays selected after streaming");
+        var secondProvider = (System.Windows.Controls.ComboBox)comparison.FindName("SecondProvider");
+        check(secondProvider.SelectedItem is QProviderChoice choice && choice.Id == vm.QCompareProvider
+            && ((TextBlock)secondProvider.Template.FindName("SelectedLabel", secondProvider)).Text == choice.Name,
+            "Second provider template renders the actual selected provider name");
+        var leftText = (TextBlock)comparison.FindName("LeftResponse");
+        var rightText = (TextBlock)comparison.FindName("RightResponse");
+        check(leftText.Text == vm.QLeftAnswer && rightText.Text == vm.QRightAnswer, "Expanded columns bind the two independent answers");
+        var shell = (FrameworkElement)window.FindName("GlassShell");
+        void Crop(string name)
+        {
+            var bitmap = new RenderTargetBitmap((int)Math.Ceiling(window.ActualWidth * 2), (int)Math.Ceiling(window.ActualHeight * 2), 192, 192, PixelFormats.Pbgra32);
+            bitmap.Render((Visual)window.Content);
+            var origin = shell.TranslatePoint(new System.Windows.Point(), (UIElement)window.Content);
+            var crop = new CroppedBitmap(bitmap, new Int32Rect((int)Math.Round(origin.X * 2), (int)Math.Round(origin.Y * 2),
+                (int)Math.Round(shell.ActualWidth * 2), (int)Math.Round(shell.ActualHeight * 2)));
+            var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(crop));
+            using var stream = File.Create(Path.Combine(output, name + ".png")); encoder.Save(stream);
+        }
+        Crop("compare-expanded-detail");
+        vm.IsExpanded = false; window.ApplySettings(); await capture("compare-collapsed"); Crop("compare-collapsed-detail");
+        var compact = (FrameworkElement)window.FindName("QCompactComparison");
+        check(compact.IsVisible && compact.ActualHeight >= 46 && shell.ActualHeight >= 68, "Collapsed view fits two labeled lines without overlap");
+        check(!vm.ShowCompactStatusContent, "Clock and normal status do not compete with comparison answers");
+        check(shell.ActualWidth >= 480, "Compare mode reserves readable compact width without changing normal settings");
+        vm.IsExpanded = true; position.VerificationWorkArea = (640, 480); window.ApplySettings(); await capture("compare-narrow");
+        var scroller = (ScrollViewer)comparison.FindName("ComparisonScroller");
+        scroller.ScrollToBottom(); await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        await capture("compare-narrow-scrolled");
+        check(scroller.VerticalOffset > 0, "Both stacked answers remain reachable on small screens");
+        var prompt = (FrameworkElement)window.FindName("QPromptBox"); var point = prompt.TranslatePoint(new System.Windows.Point(), shell);
+        check(point.Y + prompt.ActualHeight <= shell.ActualHeight + 1, "Compare composer remains on-screen on a small display");
+        await persistence.SaveAsync(settings); var loaded = await persistence.LoadAsync();
+        check(loaded.QCompareEnabled && loaded.QCompareProvider == "openai", "Compare mode and second provider persist");
+        position.VerificationWorkArea = (1920, 1080);
+        foreach (var hex in new[] { "#241C3C", "#F3D8B6" })
+        {
+            settings.Theme = ThemeMode.Custom; settings.CustomThemeColorHex = hex;
+            vm.ApplySettings(); vm.IsExpanded = true; window.ApplySettings(); await capture("theme-compare-" + hex[1..]);
+            var surfaceColor = ((SolidColorBrush)((Border)window.FindName("QShell")).Background).Color;
+            check(surfaceColor.ToString() == "#FF" + hex[1..], "Q shell uses custom background " + hex);
+            check(((SolidColorBrush)((Border)comparison.FindName("LeftCard")).Background).Color.ToString()
+                == "#FF" + vm.QThemePalette.Card[1..], "Comparison cards follow custom theme " + hex);
+            vm.IsExpanded = false; window.ApplySettings(); await capture("theme-compact-" + hex[1..]);
+        }
+        await persistence.SaveAsync(settings); loaded = await persistence.LoadAsync();
+        check(loaded.Theme == ThemeMode.Custom && loaded.CustomThemeColorHex == "#F3D8B6", "Custom mode and color persist");
+        settings.Theme = ThemeMode.Light; vm.ApplySettings(); vm.IsExpanded = true; window.ApplySettings(); await capture("theme-compare-light");
+        check(!vm.IsDarkTheme && vm.QThemePalette == ThemePalette.Light, "Light mode remains available after Custom");
+        settings.Theme = ThemeMode.Dark; vm.ApplySettings(); window.ApplySettings(); await capture("theme-compare-dark");
+        check(vm.IsDarkTheme && vm.QThemePalette == ThemePalette.Dark, "Dark mode remains available after Custom");
+        var picker = new ThemeColorPickerWindow("#241C3C") { ShowActivated = false, Opacity = 0 };
+        picker.Show();
+        var hexInput = (System.Windows.Controls.TextBox)picker.FindName("HexInput");
+        hexInput.Text = "#BADHEX";
+        check(!((System.Windows.Controls.Button)picker.FindName("ApplyButton")).IsEnabled, "Picker rejects invalid HEX without applying it");
+        hexInput.Text = "#123D38";
+        check(picker.SelectedColorHex == "#123D38", "Picker HEX updates the draft color");
+        ((Slider)picker.FindName("Red")).Value = 128;
+        check(picker.SelectedColorHex == "#803D38", "Picker RGB sliders update the HEX color");
+        hexInput.Text = "#241C3C"; picker.UpdateLayout();
+        var pickerBitmap = new RenderTargetBitmap((int)Math.Ceiling(picker.ActualWidth), (int)Math.Ceiling(picker.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+        pickerBitmap.Render((Visual)picker.Content);
+        var pickerEncoder = new PngBitmapEncoder(); pickerEncoder.Frames.Add(BitmapFrame.Create(pickerBitmap));
+        using (var pickerFile = File.Create(Path.Combine(output, "custom-color-picker.png"))) pickerEncoder.Save(pickerFile);
+        picker.Close();
+        check(settings.CustomThemeColorHex == "#F3D8B6", "Closing color picker without Use color leaves saved color unchanged");
+        using (var pixels = new System.Drawing.Bitmap(3, 3))
+        {
+            pixels.SetPixel(1, 2, System.Drawing.Color.FromArgb(18, 61, 56));
+            check(ScreenColorPicker.Sample(pixels, new(-1920, -200, 3, 3), new(-1919, -198)) == "#123D38",
+                "Eyedropper returns exact RGB at negative monitor coordinates");
+        }
+        vm.ClearQ(); check(!vm.IsQActive && vm.QLeftCompact == "Waiting for your question…", "New-question cleanup clears both answers");
+        toggle.IsChecked = false; await session.BeginAsync(QMode.Ask, "gemini", "gemini-default", null);
+        await vm.SubmitQAsync("Single question");
+        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        check(vm.QSingleMode && vm.QResponse == "Halve the search each step.", "Single-provider mode still works after comparison");
+    }
+
+    private sealed class ProviderFixture(string id) : IQProvider
+    {
+        public QProviderInfo Info { get; } = new(id, id, QProviderCapabilities.Text | QProviderCapabilities.Streaming, id + "-default");
+        public string? LastCredential { get; private set; }
+        public string? LastModel { get; private set; }
+        public Task<IReadOnlyList<QModelInfo>> GetModelsAsync(string? credential, CancellationToken cancellationToken, string? baseUrl = null)
+            => Task.FromResult<IReadOnlyList<QModelInfo>>([]);
+        public async IAsyncEnumerable<QStreamEvent> StreamAsync(QRequest request, string? credential, string? baseUrl,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            LastCredential = credential; LastModel = request.Model;
+            yield return new QStreamEvent.Started();
+            await Task.Yield();
+            yield return new QStreamEvent.Text(id == "gemini" ? "Halve the search each step." : id == "openai" ? "Check the middle, then repeat." : "Local fixture response — no network request.");
+            yield return new QStreamEvent.Completed();
+        }
+    }
     private sealed class FakeSecrets : IQSecretStore { public string? Get(string id) => null; public void Set(string id, string? value) { } public void Remove(string id) { } }
     private sealed class AsyncDisposeAdapter(CodexAppServerClient client) : IDisposable { public CodexAppServerClient Client => client; public void Dispose() => client.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
 }

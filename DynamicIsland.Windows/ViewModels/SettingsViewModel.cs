@@ -77,7 +77,13 @@ public sealed class SettingsViewModel : ObservableObject
     public Array SizeOptions => Enum.GetValues<IslandSize>();
     public Array VisualModeOptions => Enum.GetValues<IslandVisualMode>();
     public Array AnimationOptions => Enum.GetValues<AnimationIntensity>();
-    public Array PositionOptions => Enum.GetValues<PositionMode>();
+    public IReadOnlyList<PositionChoice> PositionOptions =>
+    [
+        new(PositionMode.TopLeft, "Top left"), new(PositionMode.TopCenter, "Top center"), new(PositionMode.TopRight, "Top right"),
+        new(PositionMode.MiddleLeft, "Middle left"), new(PositionMode.Center, "Center"), new(PositionMode.MiddleRight, "Middle right"),
+        new(PositionMode.BottomLeft, "Bottom left"), new(PositionMode.BottomCenter, "Bottom center"), new(PositionMode.BottomRight, "Bottom right"),
+        new(PositionMode.Manual, "Custom (dragged)")
+    ];
 
     public bool LaunchOnStartup { get => _settings.LaunchOnStartup; set => Set(v => _settings.LaunchOnStartup = v, value); }
     public bool AlwaysOnTop { get => _settings.AlwaysOnTop; set => Set(v => _settings.AlwaysOnTop = v, value); }
@@ -118,7 +124,24 @@ public sealed class SettingsViewModel : ObservableObject
     public bool DebugLogging { get => _settings.DebugLogging; set => Set(v => _settings.DebugLogging = v, value); }
     public bool ShowIslandInScreenshots { get => _settings.ShowIslandInScreenshots; set { Set(v => _settings.ShowIslandInScreenshots = v, value); _apply(); } }
     public bool ShowInAltTab { get => _settings.ShowInAltTab; set => Set(v => _settings.ShowInAltTab = v, value); }
-    public ThemeMode Theme { get => _settings.Theme; set => Set(v => _settings.Theme = v, value); }
+    public ThemeMode Theme
+    {
+        get => _settings.Theme;
+        set { Set(v => _settings.Theme = v, value); RaisePropertyChanged(nameof(IsCustomTheme)); }
+    }
+    public bool IsCustomTheme => Theme == ThemeMode.Custom;
+    public string CustomThemeColorHex
+    {
+        get => _settings.CustomThemeColorHex;
+        set
+        {
+            if (!ThemeColor.TryParse(value, out var color)) { RaisePropertyChanged(); return; }
+            _settings.CustomThemeColorHex = color.Hex;
+            RaisePropertyChanged(); RaisePropertyChanged(nameof(CustomThemeColorBrush)); _apply();
+        }
+    }
+    public System.Windows.Media.Brush CustomThemeColorBrush => new System.Windows.Media.SolidColorBrush(
+        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(CustomThemeColorHex));
     public IslandVisualMode IslandVisualMode { get => _settings.IslandVisualMode; set => Set(v => _settings.IslandVisualMode = v, value); }
     public IslandSize IslandSize
     {
@@ -171,11 +194,44 @@ public sealed class SettingsViewModel : ObservableObject
     public System.Windows.CornerRadius PreviewMiniCorner => new(ClampedIslandRadius * 0.5);
     public bool ScrollLongTitles { get => _settings.ScrollLongTitles; set { Set(v => _settings.ScrollLongTitles = v, value); _apply(); } }
     public AnimationIntensity AnimationIntensity { get => _settings.AnimationIntensity; set => Set(v => _settings.AnimationIntensity = v, value); }
-    public PositionMode DefaultPosition { get => _settings.DefaultPosition; set { Set(v => _settings.DefaultPosition = v, value); _apply(); } }
+    public PositionMode DefaultPosition
+    {
+        get => _settings.DefaultPosition;
+        set
+        {
+            if (_settings.DefaultPosition == value) return;
+            _settings.DefaultPosition = value;
+            _settings.SideOffset = 0;
+            _settings.TopOffset = 0;
+            RefreshPositionControls();
+            _apply();
+            _ = _settingsService.SaveAsync(_settings);
+        }
+    }
+    public int HorizontalOffsetMaximum => Math.Max(1000, System.Windows.Forms.Screen.AllScreens.Max(s => s.Bounds.Width));
+    public int HorizontalOffsetMinimum => -HorizontalOffsetMaximum;
+    public int VerticalOffsetMaximum => Math.Max(1000, System.Windows.Forms.Screen.AllScreens.Max(s => s.Bounds.Height));
+    public int VerticalOffsetMinimum => -VerticalOffsetMaximum;
+    public string PositionOffsetHelp => "Offsets are relative to the preset: positive values move inward from the right/bottom edges, or right/down from the center. Zero reaches the edge. Bottom presets sit above the taskbar.";
+    public int SideOffset
+    {
+        get => _settings.SideOffset;
+        set { _settings.SideOffset = Math.Clamp(value, HorizontalOffsetMinimum, HorizontalOffsetMaximum); RaisePropertyChanged(); _apply(); }
+    }
     public int TopOffset
     {
         get => _settings.TopOffset;
-        set { _settings.TopOffset = Math.Clamp(value, 0, 120); RaisePropertyChanged(); _apply(); }
+        set { _settings.TopOffset = Math.Clamp(value, VerticalOffsetMinimum, VerticalOffsetMaximum); RaisePropertyChanged(); _apply(); }
+    }
+    public void RefreshPositionControls()
+    {
+        RaisePropertyChanged(nameof(DefaultPosition));
+        RaisePropertyChanged(nameof(SideOffset));
+        RaisePropertyChanged(nameof(TopOffset));
+        RaisePropertyChanged(nameof(HorizontalOffsetMaximum));
+        RaisePropertyChanged(nameof(HorizontalOffsetMinimum));
+        RaisePropertyChanged(nameof(VerticalOffsetMaximum));
+        RaisePropertyChanged(nameof(VerticalOffsetMinimum));
     }
     public string SelectedMediaApp { get => _settings.SelectedMediaApp; set => Set(v => _settings.SelectedMediaApp = v, value); }
 
@@ -328,6 +384,30 @@ public sealed class SettingsViewModel : ObservableObject
     public string NotificationAppFilter { get => _settings.NotificationAppFilter; set { Set(v => _settings.NotificationAppFilter = v ?? "", value); _apply(); } }
     public bool ShowPrivacyIndicators { get => _settings.ShowPrivacyIndicators; set { Set(v => _settings.ShowPrivacyIndicators = v, value); _apply(); } }
     public bool QEnabled { get => _settings.QEnabled; set { Set(v => _settings.QEnabled = v, value); _apply(); } }
+    private QActivationShortcuts ActivationKeys => QActivationPolicy.Resolve(_settings.QActivationKeys, _settings.QActivationHotkey);
+    public bool QCtrlAltQ { get => ActivationKeys.HasFlag(QActivationShortcuts.CtrlAltQ); set => SetActivation(QActivationShortcuts.CtrlAltQ, value); }
+    public bool QShiftA { get => ActivationKeys.HasFlag(QActivationShortcuts.ShiftA); set => SetActivation(QActivationShortcuts.ShiftA, value); }
+    public bool QVarSequence { get => ActivationKeys.HasFlag(QActivationShortcuts.VarSequence); set => SetActivation(QActivationShortcuts.VarSequence, value); }
+    public bool QShiftComma { get => ActivationKeys.HasFlag(QActivationShortcuts.ShiftComma); set => SetActivation(QActivationShortcuts.ShiftComma, value); }
+    public bool QShiftPeriod { get => ActivationKeys.HasFlag(QActivationShortcuts.ShiftPeriod); set => SetActivation(QActivationShortcuts.ShiftPeriod, value); }
+    private string _qActivationStatus = "";
+    public string QActivationStatus => _qActivationStatus;
+    public void SetQActivationStatus(string status)
+    {
+        if (_qActivationStatus == status) return;
+        _qActivationStatus = status;
+        RaisePropertyChanged(nameof(QActivationStatus));
+    }
+    private void SetActivation(QActivationShortcuts flag, bool enabled,
+        [System.Runtime.CompilerServices.CallerMemberName] string? property = null)
+    {
+        var choices = enabled ? ActivationKeys | flag : ActivationKeys & ~flag;
+        if (choices == ActivationKeys) return;
+        _settings.QActivationKeys = choices;
+        RaisePropertyChanged(property);
+        _apply();
+        _ = _settingsService.SaveAsync(_settings);
+    }
     public bool QAutoExpandIsland { get => _settings.QAutoExpandIsland; set { Set(v => _settings.QAutoExpandIsland = v, value); _apply(); } }
     public bool QAutoCloseAfterResponse { get => _settings.QAutoCloseAfterResponse; set { Set(v => _settings.QAutoCloseAfterResponse = v, value); _apply(); } }
     public int QAutoCloseDelaySeconds { get => _settings.QAutoCloseDelaySeconds; set => SetSize(v => _settings.QAutoCloseDelaySeconds = v, value, 1, 300); }
@@ -336,21 +416,19 @@ public sealed class SettingsViewModel : ObservableObject
         get => _settings.QSelectedProvider;
         set
         {
-            var provider = value ?? "openai";
-            var changed = !string.Equals(_settings.QSelectedProvider, provider, StringComparison.OrdinalIgnoreCase);
-            Set(v => _settings.QSelectedProvider = v, provider);
-            if (changed && _qProviders.Find(provider) is { } selectedProvider)
-            {
-                _settings.QSelectedModel = selectedProvider.Info.DefaultModel;
-                RaisePropertyChanged(nameof(QSelectedModel));
-            }
+            if (string.IsNullOrWhiteSpace(value)
+                || string.Equals(_settings.QSelectedProvider, value, StringComparison.OrdinalIgnoreCase)
+                || _qProviders.Find(value) is not { } provider) return;
+            var selected = QProviderSelection.Switch(_settings.QProviderPreferences ??= new(),
+                _settings.QSelectedProvider, _settings.QSelectedModel, _settings.QReasoningEffort,
+                provider.Info.Id, provider.Info.DefaultModel);
+            _settings.QSelectedProvider = provider.Info.Id;
+            _settings.QSelectedModel = selected.Model;
+            _settings.QReasoningEffort = selected.ReasoningEffort;
             NormalizeProviderEffort();
-            RaisePropertyChanged(nameof(QApiKey));
-            RaisePropertyChanged(nameof(QIsCodexSelected));
-            RaisePropertyChanged(nameof(QShowApiKey));
-            RaisePropertyChanged(nameof(QModelOptions));
-            RaisePropertyChanged(nameof(QReasoningEffortOptions));
+            RefreshQProviderControls();
             _apply();
+            _ = _settingsService.SaveAsync(_settings);
         }
     }
     public string QSelectedModel
@@ -358,14 +436,44 @@ public sealed class SettingsViewModel : ObservableObject
         get => _settings.QSelectedModel;
         set
         {
-            Set(v => _settings.QSelectedModel = v ?? "gpt-4o-mini", value);
+            if (string.IsNullOrWhiteSpace(value) || value == _settings.QSelectedModel) return;
+            Set(v => _settings.QSelectedModel = v.Trim(), value);
             NormalizeProviderEffort();
             RaisePropertyChanged(nameof(QReasoningEffortOptions));
             _apply();
         }
     }
-    public string QApiKey { get => _qSecrets.Get(_settings.QSelectedProvider) ?? ""; set { _qSecrets.Set(_settings.QSelectedProvider, value); RaisePropertyChanged(); } }
-    public Array QProviderOptions => new[] { "openai", "codex", "anthropic", "gemini", "groq", "xai", "openrouter", "deepseek", "ollama" };
+    public string QApiKey
+    {
+        get => _qSecrets.Get(_settings.QSelectedProvider) ?? "";
+        set
+        {
+            _qSecrets.Set(_settings.QSelectedProvider, value.Trim());
+            RaisePropertyChanged();
+            RaisePropertyChanged(nameof(QApiKeyStatus));
+            RaisePropertyChanged(nameof(QSavedKeyProviders));
+        }
+    }
+    public IReadOnlyList<QProviderChoice> QProviderOptions => _qProviders.Providers
+        .Select(provider => new QProviderChoice(provider.Info.Id, provider.Info.DisplayName)).ToArray();
+    public string QApiKeyStatus => string.IsNullOrWhiteSpace(QApiKey)
+        ? "No key saved for this provider." : "Key saved for this provider. Paste a new key below to replace it.";
+    public string QSavedKeyProviders
+    {
+        get
+        {
+            var saved = QProviderOptions.Where(p => !string.IsNullOrWhiteSpace(_qSecrets.Get(p.Id))).Select(p => p.Name).ToArray();
+            return saved.Length == 0 ? "No API keys saved yet." : "Saved keys: " + string.Join(", ", saved);
+        }
+    }
+    public void RefreshQProviderControls()
+    {
+        foreach (var property in new[] { nameof(QSelectedProvider), nameof(QModelOptions), nameof(QSelectedModel),
+            nameof(QReasoningEffortOptions), nameof(QReasoningEffort), nameof(QApiKey), nameof(QApiKeyStatus),
+            nameof(QSavedKeyProviders), nameof(QIsCodexSelected), nameof(QShowApiKey) })
+            RaisePropertyChanged(property);
+        QConnectionStatus = "Not tested";
+    }
     public bool QIsCodexSelected => string.Equals(_settings.QSelectedProvider, "codex", StringComparison.OrdinalIgnoreCase);
     public bool QShowApiKey => !QIsCodexSelected && !string.Equals(_settings.QSelectedProvider, "ollama", StringComparison.OrdinalIgnoreCase);
     private CodexModel? SelectedCodexModel => _codexModels.FirstOrDefault(model => string.Equals(model.Id, _settings.QSelectedModel, StringComparison.OrdinalIgnoreCase));
@@ -384,7 +492,7 @@ public sealed class SettingsViewModel : ObservableObject
     public string QReasoningEffort
     {
         get => _settings.QReasoningEffort;
-        set { Set(v => _settings.QReasoningEffort = v ?? "auto", value); NormalizeProviderEffort(); _apply(); }
+        set { if (string.IsNullOrWhiteSpace(value)) return; Set(v => _settings.QReasoningEffort = v, value); NormalizeProviderEffort(); _apply(); }
     }
     public IReadOnlyList<string> QReasoningEffortOptions => QIsCodexSelected
         ? CodexModelSelectionPolicy.EffortOptions(SelectedCodexModel)
@@ -486,11 +594,13 @@ public sealed class SettingsViewModel : ObservableObject
 
     private async Task TestQAsync()
     {
-        var provider = _qProviders.Find(_settings.QSelectedProvider);
+        var providerId = _settings.QSelectedProvider;
+        var provider = _qProviders.Find(providerId);
         if (provider is null) { QConnectionStatus = "Provider unavailable"; return; }
         if (string.Equals(_settings.QSelectedProvider, "codex", StringComparison.OrdinalIgnoreCase))
         {
-            await _codexAccount.RefreshAsync().ConfigureAwait(false);
+            await _codexAccount.RefreshAsync();
+            if (_settings.QSelectedProvider != providerId) return;
             var snapshot = _codexAccount.Snapshot;
             QConnectionStatus = snapshot.IsConnected
                 ? $"Connected · {(snapshot.Models?.Count ?? 0)} Codex models available" + (snapshot.UsedPercent is int used ? $" · {used}% used" : "")
@@ -507,12 +617,13 @@ public sealed class SettingsViewModel : ObservableObject
         {
             var baseUrl = string.Equals(_settings.QSelectedProvider, "ollama", StringComparison.OrdinalIgnoreCase)
                 ? _settings.QOllamaBaseUrl : null;
-            var models = await provider.GetModelsAsync(_qSecrets.Get(_settings.QSelectedProvider), CancellationToken.None, baseUrl);
-            _providerModels[_settings.QSelectedProvider] = models;
+            var models = await provider.GetModelsAsync(_qSecrets.Get(providerId), CancellationToken.None, baseUrl);
+            _providerModels[providerId] = models;
+            if (_settings.QSelectedProvider != providerId) return;
             RaisePropertyChanged(nameof(QModelOptions));
             QConnectionStatus = $"Connected · {models.Count} model{(models.Count == 1 ? "" : "s")} available";
         }
-        catch (Exception ex) { QConnectionStatus = ex.Message.Length > 120 ? ex.Message[..120] : ex.Message; }
+        catch (Exception ex) { if (_settings.QSelectedProvider == providerId) QConnectionStatus = ex.Message.Length > 120 ? ex.Message[..120] : ex.Message; }
     }
 
     private async Task SignInCodexAsync()
@@ -800,6 +911,10 @@ public sealed class SettingsViewModel : ObservableObject
 }
 
 public sealed record ModuleItem(string Key, string Name);
+public sealed record PositionChoice(PositionMode Value, string Name)
+{
+    public override string ToString() => Name;
+}
 public sealed record SettingsSection(string Key, string Name, string Glyph);
 
 public sealed class LaunchListItem : ObservableObject

@@ -17,10 +17,12 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#6BA9FF" />
+                            <Setter TargetName="Chrome" Property="BorderBrush"
+                                    Value="{Binding DataContext.AccentBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocused" Value="True">
-                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#6BA9FF" />
+                            <Setter TargetName="Chrome" Property="BorderBrush"
+                                    Value="{Binding DataContext.AccentBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.45" />
@@ -84,6 +86,104 @@
                             </Border>
                         </Popup>
                     </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="TimerSurfaceButton" TargetType="Button" BasedOn="{StaticResource SettingsButton}">
+        <Setter Property="Foreground" Value="#FFD7E4F6" />
+        <Setter Property="Background" Value="#FF111E32" />
+        <Setter Property="BorderBrush" Value="#FF2F4C70" />
+        <Setter Property="Padding" Value="16,9" />
+        <Setter Property="MinHeight" Value="42" />
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text" />
+    </Style>
+    <Style x:Key="TimerChipDeleteButton" TargetType="Button">
+        <Setter Property="Width" Value="26" />
+        <Setter Property="Height" Value="26" />
+        <Setter Property="MinWidth" Value="26" />
+        <Setter Property="MinHeight" Value="26" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Foreground" Value="#FFB7C7DF" />
+        <Setter Property="Background" Value="#331A2E47" />
+        <Setter Property="BorderBrush" Value="#557B9AC2" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="FontFamily" Value="Segoe Fluent Icons" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="13">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#FF713A48" />
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#FFFF9AA8" />
+                            <Setter Property="Foreground" Value="White" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Opacity" Value="0.72" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#FFFF9AA8" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="TimerPrimaryButton" TargetType="Button" BasedOn="{StaticResource TimerSurfaceButton}">
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="Background" Value="{Binding DataContext.AccentBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+        <Setter Property="BorderBrush" Value="{Binding DataContext.AccentBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style x:Key="TimerTextBox" TargetType="TextBox">
+        <Setter Property="Foreground" Value="#FFF5F5F7" />
+        <Setter Property="Background" Value="#FF101B2B" />
+        <Setter Property="BorderBrush" Value="#FF2F4C70" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CaretBrush" Value="{Binding DataContext.AccentBrush, RelativeSource={RelativeSource AncestorType=Window}}" />
+        <Setter Property="MinHeight" Value="42" />
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="14" Padding="{TemplateBinding Padding}">
+                        <ScrollViewer x:Name="PART_ContentHost" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style TargetType="ScrollBar">
+        <Setter Property="Width" Value="8" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                    <Track x:Name="PART_Track" IsDirectionReversed="True" Orientation="Vertical">
+                        <Track.DecreaseRepeatButton>
+                            <RepeatButton Command="{x:Static ScrollBar.PageUpCommand}" Opacity="0" Focusable="False" />
+                        </Track.DecreaseRepeatButton>
+                        <Track.Thumb>
+                            <Thumb MinHeight="38">
+                                <Thumb.Template>
+                                    <ControlTemplate TargetType="Thumb">
+                                        <Border Background="#FF56647A" CornerRadius="4" Margin="2,0" />
+                                    </ControlTemplate>
+                                </Thumb.Template>
+                            </Thumb>
+                        </Track.Thumb>
+                        <Track.IncreaseRepeatButton>
+                            <RepeatButton Command="{x:Static ScrollBar.PageDownCommand}" Opacity="0" Focusable="False" />
+                        </Track.IncreaseRepeatButton>
+                    </Track>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>

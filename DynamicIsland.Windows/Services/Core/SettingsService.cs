@@ -82,6 +82,8 @@ public sealed class SettingsService(LoggingService log)
             ? "Automatic" : settings.SelectedMediaApp;
         settings.CollapseDelayMilliseconds = Math.Clamp(settings.CollapseDelayMilliseconds, 100, 5000);
         if (!Enum.IsDefined(settings.Theme)) settings.Theme = ThemeMode.System;
+        settings.CustomThemeColorHex = Infrastructure.ThemeColor.TryParse(settings.CustomThemeColorHex, out var themeColor)
+            ? themeColor.Hex : Infrastructure.ThemePalette.DefaultCustomColor;
         if (!Enum.IsDefined(settings.IslandSize)) settings.IslandSize = IslandSize.Normal;
         if (!Enum.IsDefined(settings.IslandVisualMode)) settings.IslandVisualMode = IslandVisualMode.Apple;
         settings.IslandWidth = Math.Clamp(settings.IslandWidth, 72, 360);
@@ -115,12 +117,19 @@ public sealed class SettingsService(LoggingService log)
         settings.QMaxResponseTokens = Math.Clamp(settings.QMaxResponseTokens, 2048, 32768);
         settings.QReasoningEffort = settings.QReasoningEffort?.Trim().ToLowerInvariant() switch
         {
-            "minimal" or "low" or "medium" or "high" or "xhigh" or "max" or "ultra" => settings.QReasoningEffort.Trim().ToLowerInvariant(),
+              "none" or "minimal" or "low" or "medium" or "high" or "xhigh" or "max" or "ultra" => settings.QReasoningEffort.Trim().ToLowerInvariant(),
             _ => "auto"
         };
+        settings.QProviderPreferences ??= new();
+        settings.QProviderPreferences[settings.QSelectedProvider.ToLowerInvariant()] =
+            new(settings.QSelectedModel, settings.QReasoningEffort);
         settings.QAskSystemPrompt ??= "";
         settings.QSaySystemPrompt ??= "";
+        settings.QActivationHotkey = string.Equals(settings.QActivationHotkey, "Shift+A", StringComparison.OrdinalIgnoreCase)
+            ? "Shift+A"
+            : "Ctrl+Alt+Q";
         settings.QShortcuts ??= [];
+        settings.QActivationKeys = QActivationPolicy.Resolve(settings.QActivationKeys, settings.QActivationHotkey);
         settings.QHotkeyShortcut ??= "";
         if (!string.IsNullOrWhiteSpace(settings.QHotkeyShortcut) &&
             !settings.QShortcuts.Any(shortcut => string.Equals(shortcut.Name, settings.QHotkeyShortcut, StringComparison.OrdinalIgnoreCase)))
